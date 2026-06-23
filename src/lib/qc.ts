@@ -1,10 +1,9 @@
 // ============================================================================
-//  QC Time Tracker data layer (V1 — per-product tabs + segment filter).
+//  QC Time Tracker data layer (V2 — full daily history for multi-view charts).
 //  Each product (image / 360 / video) is its own daily question:
-//     day, throughput, median_qc_hrs, avg_qc_hrs, under_6h, h6_12, over_12h
-//     [, segment]   <- optional; enables the Enterprise/SMB/Embed master filter
-//  The app fetches each configured product, optionally filters by segment, and
-//  returns per-product metrics for the last 7 days (anchored to the latest date).
+//     day, throughput, median_qc_hrs, avg_qc_hrs, under_6h, h6_12, over_12h [, segment]
+//  We return the COMPLETE daily series per product (ascending). The client
+//  derives the views: last 7 days, 7d-vs-prev-7d, and month-to-date-vs-last-month.
 // ============================================================================
 
 export type QcProduct = "image" | "360" | "video";
@@ -18,7 +17,7 @@ export interface QcBuckets {
 
 export interface QcDailyPoint {
   date: string; // yyyy-mm-dd
-  label: string; // weekday
+  label: string; // weekday (Mon..Sun)
   throughput: number;
   medianHrs: number | null;
   avgHrs: number | null;
@@ -27,20 +26,13 @@ export interface QcDailyPoint {
 
 export interface QcProductData {
   configured: boolean;
-  avgHrs: number | null;
-  medianHrs: number | null;
-  throughputTotal: number;
-  throughputPerDay: number;
-  improvementVsLastDayPct: number | null;
-  improvementVs3DaysPct: number | null;
-  totalBuckets: QcBuckets;
-  daily: QcDailyPoint[];
+  daily: QcDailyPoint[]; // ALL days, ascending by date
 }
 
 export interface QcTrackerData {
   source: "metabase" | "unconfigured";
   asOf: string | null;
-  segment: string; // applied filter ("all" | enterprise | smb | embed)
+  segment: string;
   availableSegments: string[];
   hasSegmentColumn: boolean;
   products: Record<QcProduct, QcProductData>;
@@ -65,10 +57,7 @@ function uuidFor(p: QcProduct): string | undefined {
   return process.env.METABASE_QC_VIDEO_UUID;
 }
 
-export async function buildQcTracker(
-  now: Date,
-  segment = "all"
-): Promise<QcTrackerData> {
+export async function buildQcTracker(now: Date, segment = "all"): Promise<QcTrackerData> {
   const results = await Promise.all(
     QC_PRODUCTS.map(async (p) => {
       const uuid = uuidFor(p);
@@ -95,18 +84,26 @@ export async function buildQcTracker(
   let asOf: string | null = null;
   for (const { p, rows } of results) {
     if (!rows || !rows.length) {
-      products[p] = emptyProduct();
+      products[p] = { configured: false, daily: [] };
       continue;
     }
     const filtered =
       segment !== "all" && hasSegmentColumn
         ? rows.filter((r) => (r.segment || "").toLowerCase() === segment.toLowerCase())
         : rows;
-    const merged = mergeByDate(filtered);
-    const pd = buildProduct(merged, now);
-    products[p] = pd;
-    if (pd.daily.length) {
-      const last = pd.daily[pd.daily.length - 1].date;
+    const daily = mergeByDate(filtered)
+      .sort((a, b) => (a.date < b.date ? -1 : 1))
+      .map<QcDailyPoint>((r) => ({
+        date: r.date,
+        label: DOW[new Date(`${r.date}T00:00:00Z`).getUTCDay()],
+        throughput: r.throughput,
+        medianHrs: r.medianHrs,
+        avgHrs: r.avgHrs,
+        buckets: { under6: r.under6, h6_12: r.h6_12, over12: r.over12 },
+      }));
+    products[p] = { configured: true, daily };
+    if (daily.length) {
+      const last = daily[daily.length - 1].date;
       if (!asOf || last > asOf) asOf = last;
     }
   }
@@ -190,8 +187,6 @@ function mergeByDate(rows: RawDaily[]): RawDaily[] {
       out.push(group[0]);
       continue;
     }
-    // Aggregate across segments: sum counts, throughput-weighted avg, median ->
-    // weighted-avg approximation (true median not recoverable from rollups).
     let thr = 0,
       num = 0,
       mnum = 0;
@@ -216,82 +211,4 @@ function mergeByDate(rows: RawDaily[]): RawDaily[] {
     });
   }
   return out;
-}
-
-function buildProduct(rows: RawDaily[], now: Date): QcProductData {
-  if (!rows.length) return emptyProduct();
-  const byDate = new Map(rows.map((r) => [r.date, r]));
-  const maxDate = rows.reduce((m, r) => (r.date > m ? r.date : m), rows[0].date);
-  const anchor = new Date(`${maxDate}T00:00:00Z`).getTime();
-
-  const daily: QcDailyPoint[] = [];
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(anchor - i * 86400000);
-    const date = d.toISOString().slice(0, 10);
-    const r = byDate.get(date);
-    daily.push({
-      date,
-      label: DOW[d.getUTCDay()],
-      throughput: r?.throughput ?? 0,
-      medianHrs: r?.medianHrs ?? null,
-      avgHrs: r?.avgHrs ?? null,
-      buckets: {
-        under6: r?.under6 ?? 0,
-        h6_12: r?.h6_12 ?? 0,
-        over12: r?.over12 ?? 0,
-      },
-    });
-  }
-
-  const improve = (cur: number | null, prev: number | null) =>
-    cur != null && prev != null && prev > 0 ? (prev - cur) / prev : null;
-  const last = daily[daily.length - 1];
-  const prev = daily[daily.length - 2];
-  const wAvg = (slice: QcDailyPoint[]) => {
-    let n = 0,
-      d = 0;
-    for (const p of slice)
-      if (p.avgHrs != null) {
-        n += p.avgHrs * p.throughput;
-        d += p.throughput;
-      }
-    return d > 0 ? n / d : null;
-  };
-
-  const totalBuckets = daily.reduce(
-    (a, p) => ({
-      under6: a.under6 + p.buckets.under6,
-      h6_12: a.h6_12 + p.buckets.h6_12,
-      over12: a.over12 + p.buckets.over12,
-    }),
-    { under6: 0, h6_12: 0, over12: 0 }
-  );
-  const throughputTotal = daily.reduce((a, p) => a + p.throughput, 0);
-  const meds = daily.map((p) => p.medianHrs).filter((v): v is number => v != null).sort((a, b) => a - b);
-
-  return {
-    configured: true,
-    avgHrs: wAvg(daily),
-    medianHrs: meds.length ? meds[Math.floor(meds.length / 2)] : null,
-    throughputTotal,
-    throughputPerDay: Math.round(throughputTotal / (daily.length || 1)),
-    improvementVsLastDayPct: improve(last?.avgHrs ?? null, prev?.avgHrs ?? null),
-    improvementVs3DaysPct: improve(wAvg(daily.slice(-3)), wAvg(daily.slice(-6, -3))),
-    totalBuckets,
-    daily,
-  };
-}
-
-function emptyProduct(): QcProductData {
-  return {
-    configured: false,
-    avgHrs: null,
-    medianHrs: null,
-    throughputTotal: 0,
-    throughputPerDay: 0,
-    improvementVsLastDayPct: null,
-    improvementVs3DaysPct: null,
-    totalBuckets: { under6: 0, h6_12: 0, over12: 0 },
-    daily: [],
-  };
 }
