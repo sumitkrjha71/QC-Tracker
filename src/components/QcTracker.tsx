@@ -12,10 +12,16 @@ const TABS: { key: QcProduct; label: string }[] = [
 
 const SEG_LABEL: Record<string, string> = {
   all: "All segments",
+  ent: "Enterprise",
   enterprise: "Enterprise",
+  mid: "Mid-Market",
+  resellers: "Resellers",
+  reseller: "Resellers",
   smb: "SMB",
   embed: "Embed",
+  unknown: "Unknown",
 };
+const segLabel = (s: string) => SEG_LABEL[s.toLowerCase()] || s;
 
 export default function QcTracker() {
   const [data, setData] = useState<QcTrackerData | null>(null);
@@ -84,7 +90,7 @@ export default function QcTracker() {
             <span>Segment</span>
             <select value={segment} onChange={(e) => setSegment(e.target.value)}>
               {segOptions.map((s) => (
-                <option key={s} value={s}>{SEG_LABEL[s] || s}</option>
+                <option key={s} value={s}>{segLabel(s)}</option>
               ))}
             </select>
           </label>
@@ -120,7 +126,7 @@ export default function QcTracker() {
         </div>
       )}
 
-      {loading && <div className="qc-loading">Loading {SEG_LABEL[segment] || segment}…</div>}
+      {loading && <div className="qc-loading">Loading {segLabel(segment)}…</div>}
       {error && <div className="qc-error">⚠ {error}</div>}
 
       {data && product && (
