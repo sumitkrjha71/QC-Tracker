@@ -147,23 +147,21 @@ function ProductView({ product, asOf, name }: { product: QcProductData; asOf: st
       <ChartCard title={`Average QC time — ${name}`} daily={daily} asOf={asOf} kind="line" />
       <ChartCard title="Resolution time buckets" daily={daily} asOf={asOf} kind="buckets" />
       <ChartCard title="Throughput" daily={daily} asOf={asOf} kind="throughput" />
-      <UserProductivityCard userDaily={product.userDaily} />
+      <UserProductivityCard userDaily={product.userDaily} name={name} />
     </>
   );
 }
 
-/* ----- per-QC-user productivity (stacked by user, last 60 days) ----- */
-const USER_PALETTE = ["#6d5cff", "#0ea5e9", "#22c55e", "#f59e0b", "#ef4444", "#a855f7", "#14b8a6", "#ec4899"];
-
-function UserProductivityCard({ userDaily }: { userDaily: UserDayRow[] }) {
+/* ----- avg QC processed per user, per day (last 60 days) ----- */
+function UserProductivityCard({ userDaily, name }: { userDaily: UserDayRow[]; name: string }) {
   return (
     <div className="card qc-chart-card">
       <div className="qc-chart-head">
-        <h2>QC user productivity</h2>
-        <span className="hint">SKUs processed per QC user · last 60 days</span>
+        <h2>Avg QC per user — {name}</h2>
+        <span className="hint">average SKUs processed per QC user, per day · last 60 days</span>
       </div>
       {userDaily.length ? (
-        <UserProductivityChart userDaily={userDaily} />
+        <AvgPerUserChart userDaily={userDaily} />
       ) : (
         <div className="qc-empty">Connect the per-user productivity question to populate this (see chat for the SQL).</div>
       )}
@@ -171,83 +169,67 @@ function UserProductivityCard({ userDaily }: { userDaily: UserDayRow[] }) {
   );
 }
 
-function UserProductivityChart({ userDaily }: { userDaily: UserDayRow[] }) {
+function AvgPerUserChart({ userDaily }: { userDaily: UserDayRow[] }) {
   const [hover, setHover] = useState<number | null>(null);
-  const { dates, users, byDate } = useMemo(() => {
-    const dateSet = Array.from(new Set(userDaily.map((r) => r.date))).sort();
-    const totals = new Map<string, number>();
-    for (const r of userDaily) totals.set(r.userId, (totals.get(r.userId) || 0) + r.count);
-    const ranked = [...totals.entries()].sort((a, b) => b[1] - a[1]);
-    const TOPN = 8;
-    const top = ranked.slice(0, TOPN).map(([u]) => u);
-    const topSet = new Set(top);
-    const byDate = new Map<string, Record<string, number>>();
+  const points = useMemo(() => {
+    const byDate = new Map<string, { total: number; users: Set<string> }>();
     for (const r of userDaily) {
-      const key = topSet.has(r.userId) ? r.userId : "__others__";
-      const m = byDate.get(r.date) || {};
-      m[key] = (m[key] || 0) + r.count;
-      byDate.set(r.date, m);
+      const e = byDate.get(r.date) || { total: 0, users: new Set<string>() };
+      e.total += r.count;
+      e.users.add(r.userId);
+      byDate.set(r.date, e);
     }
-    const users = ranked.length > TOPN ? [...top, "__others__"] : top;
-    return { dates: dateSet, users, byDate };
+    return [...byDate.entries()]
+      .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+      .map(([date, e]) => ({
+        date,
+        label: date.slice(5),
+        avg: e.users.size ? e.total / e.users.size : 0,
+        total: e.total,
+        users: e.users.size,
+      }));
   }, [userDaily]);
 
-  const color = (u: string, i: number) => (u === "__others__" ? "var(--text-faint)" : USER_PALETTE[i % USER_PALETTE.length]);
-  const label = (u: string) => (u === "__others__" ? "Others" : u.length > 10 ? u.slice(0, 10) : u);
-
-  const W = 860, H = 320, PADL = 46, PADR = 12, PADT = 16, PADB = 34;
+  const W = 860, H = 300, PADL = 46, PADR = 16, PADT = 20, PADB = 34;
   const iw = W - PADL - PADR, ih = H - PADT - PADB;
-  const n = dates.length;
-  const totalsByDate = dates.map((d) => users.reduce((a, u) => a + ((byDate.get(d) || {})[u] || 0), 0));
-  const yMax = niceMax(Math.max(1, ...totalsByDate));
-  const groupW = iw / Math.max(1, n);
-  const barW = Math.min(16, groupW * 0.72);
-  const y = (vv: number) => PADT + ih - (ih * vv) / yMax;
-  const grid = [0, 0.5, 1].map((f) => yMax * f);
+  const n = points.length;
+  const yMax = niceMax(Math.max(1, ...points.map((p) => p.avg)));
+  const x = (i: number) => PADL + (n <= 1 ? iw / 2 : (iw * i) / (n - 1));
+  const y = (v: number) => PADT + ih - (ih * v) / yMax;
+  const grid = [0, 0.25, 0.5, 0.75, 1].map((f) => yMax * f);
   const showX = (i: number) => n <= 12 || i % Math.ceil(n / 12) === 0 || i === n - 1;
-  const cx = (i: number) => PADL + groupW * (i + 0.5);
+  const path = points.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.avg).toFixed(1)}`).join(" ");
+  const area = n > 1 ? `${path} L${x(n - 1).toFixed(1)},${(PADT + ih).toFixed(1)} L${x(0).toFixed(1)},${(PADT + ih).toFixed(1)} Z` : "";
 
   return (
     <div className="qc-chart-wrap">
-      <div className="qc-legend qc-userlegend">
-        {users.map((u, i) => <span key={u} className="qc-leg"><i style={{ background: color(u, i) }} />{label(u)}</span>)}
-      </div>
       <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="qc-svg" onMouseLeave={() => setHover(null)}>
+        <defs>
+          <linearGradient id="apuArea" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.28" />
+            <stop offset="100%" stopColor="var(--accent)" stopOpacity="0" />
+          </linearGradient>
+        </defs>
         {grid.map((g, i) => (
           <g key={i}><line x1={PADL} y1={y(g)} x2={W - PADR} y2={y(g)} className="qc-grid" />
             <text x={PADL - 8} y={y(g) + 4} className="qc-axis" textAnchor="end">{fmtCompact(g)}</text></g>
         ))}
-        {dates.map((d, di) => {
-          const m = byDate.get(d) || {};
-          const x = cx(di) - barW / 2;
-          let cum = 0;
-          return (
-            <g key={d}>
-              {users.map((u, ui) => {
-                const val = m[u] || 0;
-                if (val <= 0) return null;
-                const top = y(cum + val), h = (ih * val) / yMax;
-                cum += val;
-                return <rect key={u} x={x} y={top} width={barW} height={h} fill={color(u, ui)} className="qc-gbar"><title>{`${d} · ${label(u)}: ${val}`}</title></rect>;
-              })}
-              {showX(di) && <text x={cx(di)} y={H - 12} className="qc-axis" textAnchor="middle">{d.slice(5)}</text>}
-            </g>
-          );
-        })}
-        {hover != null && <line x1={cx(hover)} y1={PADT} x2={cx(hover)} y2={PADT + ih} className="qc-guide" />}
-        {dates.map((_, i) => <rect key={i} x={PADL + groupW * i} y={PADT} width={groupW} height={ih} fill="transparent" onMouseEnter={() => setHover(i)} />)}
+        {points.map((p, i) => showX(i) && <text key={i} x={x(i)} y={H - 12} className="qc-axis" textAnchor="middle">{p.label}</text>)}
+        {area && <path d={area} fill="url(#apuArea)" />}
+        <path d={path} fill="none" stroke="var(--accent)" strokeWidth={2.6} strokeLinejoin="round" strokeLinecap="round" />
+        {points.map((p, i) => <circle key={i} cx={x(i)} cy={y(p.avg)} r={hover === i ? 4.5 : 2.4} fill="var(--accent)" />)}
+        {n <= 14 && points.map((p, i) => <text key={`l${i}`} x={x(i)} y={y(p.avg) - 9} className="qc-dlabel" textAnchor="middle">{Math.round(p.avg)}</text>)}
+        {hover != null && <line x1={x(hover)} y1={PADT} x2={x(hover)} y2={PADT + ih} className="qc-guide" />}
+        {points.map((_, i) => <rect key={i} x={x(i) - iw / (2 * Math.max(1, n - 1))} y={PADT} width={iw / Math.max(1, n - 1)} height={ih} fill="transparent" onMouseEnter={() => setHover(i)} />)}
       </svg>
-      {hover != null && (() => {
-        const d = dates[hover], m = byDate.get(d) || {};
-        const tot = users.reduce((a, u) => a + (m[u] || 0), 0);
-        return (
-          <div className="qc-tooltip" style={{ left: `${(cx(hover) / W) * 100}%` }}>
-            <div className="qc-tt-day">{d}</div>
-            {users.filter((u) => (m[u] || 0) > 0).map((u) => <div key={u} className="qc-tt-row"><span>{label(u)}</span><b>{fmtInt(m[u])}</b></div>)}
-            <div className="qc-tt-row" style={{ borderTop: "1px solid var(--border)", marginTop: 4, paddingTop: 4 }}><span>Total</span><b>{fmtInt(tot)}</b></div>
-          </div>
-        );
-      })()}
+      {hover != null && points[hover] && (
+        <div className="qc-tooltip" style={{ left: `${(x(hover) / W) * 100}%` }}>
+          <div className="qc-tt-day">{points[hover].date}</div>
+          <div className="qc-tt-row"><span>Avg / user</span><b>{Math.round(points[hover].avg).toLocaleString("en-US")}</b></div>
+          <div className="qc-tt-row"><span>Total</span><b>{fmtInt(points[hover].total)}</b></div>
+          <div className="qc-tt-row"><span>Active users</span><b>{points[hover].users}</b></div>
+        </div>
+      )}
     </div>
   );
 }
