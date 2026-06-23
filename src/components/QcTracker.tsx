@@ -101,6 +101,7 @@ const SEG_PALETTE = ["#0ea5e9", "#22c55e", "#f59e0b", "#ef4444", "#a855f7", "#14
 
 function ProductView({ product, asOf, segment }: { product: QcProductData; asOf: string; segment: string }) {
   const daily = product.daily;
+  const [view, setView] = useState<View>("7d");
 
   const k = useMemo(() => {
     const v = buildView(daily, "7d", asOf);
@@ -131,13 +132,13 @@ function ProductView({ product, asOf, segment }: { product: QcProductData; asOf:
 
   // when "All segments" is selected, overlay each segment's avg-QC line on the first graph
   const segOverlays = useMemo(() => {
-    if (segment !== "all" || !product.dailyBySegment) return undefined;
+    if (segment !== "all" || view === "7dcmp" || !product.dailyBySegment) return undefined;
     return product.dailyBySegment.map((s, i) => ({
       label: segLabel(s.segment),
       color: SEG_PALETTE[i % SEG_PALETTE.length],
       days: s.daily.map((d) => ({ date: d.date, value: d.avgHrs })),
     }));
-  }, [segment, product.dailyBySegment]);
+  }, [segment, view, product.dailyBySegment]);
 
   return (
     <>
@@ -148,14 +149,23 @@ function ProductView({ product, asOf, segment }: { product: QcProductData; asOf:
         <Kpi label="Weekly QC'd" value={fmtInt(k.weeklyQcd)} sub="SKUs · last 7 days" />
       </div>
 
-      <MetricChart title="Average QC time" days={tatDays} asOf={asOf} fmt={fmtHrs} labelFmt={fmtHrsShort} defaultType="line" overlays={segOverlays} overlayMainLabel="All (total)" yMaxCap={24} />
-      <BucketsCard daily={daily} asOf={asOf} />
-      <MetricChart title="Throughput per day" days={thrDays} asOf={asOf} fmt={fmtInt} labelFmt={fmtCompact} defaultType="bar" />
-      <MetricChart
-        title="Avg number of SKUs processed per QC user"
-        hint={product.userDaily.length ? undefined : "Connect the per-user productivity question (see chat)"}
-        days={avgPerUserDays} asOf={asOf} fmt={fmtInt} labelFmt={fmtCompact} defaultType="line"
-      />
+      <div className="qc-periodbar">
+        <span className="qc-period-label">Period</span>
+        <div className="qc-viewtoggle">
+          {VIEW_OPTS.map((o) => <button key={o.key} className={`qc-vbtn ${view === o.key ? "active" : ""}`} onClick={() => setView(o.key)}>{o.label}</button>)}
+        </div>
+      </div>
+
+      <div className="qc-grid2">
+        <MetricChart title="Average QC time" days={tatDays} asOf={asOf} view={view} fmt={fmtHrs} labelFmt={fmtHrsShort} defaultType="line" overlays={segOverlays} overlayMainLabel="All (total)" yMaxCap={24} />
+        <BucketsCard daily={daily} asOf={asOf} view={view} />
+        <MetricChart title="Throughput per day" days={thrDays} asOf={asOf} view={view} fmt={fmtInt} labelFmt={fmtCompact} defaultType="bar" />
+        <MetricChart
+          title="Avg number of SKUs processed per QC user"
+          hint={product.userDaily.length ? undefined : "Connect the per-user productivity question (see chat)"}
+          days={avgPerUserDays} asOf={asOf} view={view} fmt={fmtInt} labelFmt={fmtCompact} defaultType="line"
+        />
+      </div>
     </>
   );
 }
@@ -172,12 +182,11 @@ function ThroughputKpi({ today, delta }: { today: number | null; delta: number |
 }
 
 /* ----- unified metric chart: line<->bar toggle, 4 views, trendline, labels ----- */
-function MetricChart({ title, hint, days, asOf, fmt, labelFmt, defaultType, overlays, overlayMainLabel, yMaxCap }: {
-  title: string; hint?: string; days: DayValue[]; asOf: string;
+function MetricChart({ title, hint, days, asOf, view, fmt, labelFmt, defaultType, overlays, overlayMainLabel, yMaxCap }: {
+  title: string; hint?: string; days: DayValue[]; asOf: string; view: View;
   fmt: (n: number | null) => string; labelFmt: (n: number) => string; defaultType: ChartType;
   overlays?: { label: string; color: string; days: DayValue[] }[]; overlayMainLabel?: string; yMaxCap?: number;
 }) {
-  const [view, setView] = useState<View>("7d");
   const [type, setType] = useState<ChartType>(defaultType);
   const v = useMemo(() => buildView(days, view, asOf), [days, view, asOf]);
   const overlayViews = useMemo(
@@ -195,9 +204,6 @@ function MetricChart({ title, hint, days, asOf, fmt, labelFmt, defaultType, over
           <div className="qc-typetoggle">
             <button className={type === "line" ? "active" : ""} onClick={() => setType("line")} title="Line view"><LineIcon /></button>
             <button className={type === "bar" ? "active" : ""} onClick={() => setType("bar")} title="Bar view"><BarIcon /></button>
-          </div>
-          <div className="qc-viewtoggle">
-            {VIEW_OPTS.map((o) => <button key={o.key} className={`qc-vbtn ${view === o.key ? "active" : ""}`} onClick={() => setView(o.key)}>{o.label}</button>)}
           </div>
         </div>
       </div>
@@ -319,8 +325,7 @@ function trend(values: (number | null)[]): { m: number; b: number } | null {
 }
 
 /* ----- buckets card: bar<->line toggle (line = 3 bucket lines), 4 views ----- */
-function BucketsCard({ daily, asOf }: { daily: QcDailyPoint[]; asOf: string }) {
-  const [view, setView] = useState<View>("7d");
+function BucketsCard({ daily, asOf, view }: { daily: QcDailyPoint[]; asOf: string; view: View }) {
   const [type, setType] = useState<ChartType>("bar");
   const v = useMemo(() => buildView(daily, view, asOf), [daily, view, asOf]);
   return (
@@ -331,9 +336,6 @@ function BucketsCard({ daily, asOf }: { daily: QcDailyPoint[]; asOf: string }) {
           <div className="qc-typetoggle">
             <button className={type === "line" ? "active" : ""} onClick={() => setType("line")} title="Line view"><LineIcon /></button>
             <button className={type === "bar" ? "active" : ""} onClick={() => setType("bar")} title="Bar view"><BarIcon /></button>
-          </div>
-          <div className="qc-viewtoggle">
-            {VIEW_OPTS.map((o) => <button key={o.key} className={`qc-vbtn ${view === o.key ? "active" : ""}`} onClick={() => setView(o.key)}>{o.label}</button>)}
           </div>
         </div>
       </div>
