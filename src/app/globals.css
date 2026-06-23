@@ -374,9 +374,10 @@ tbody tr:hover {
 .qc-chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
 .qc-chart-head h2 { font-size: 14px; margin: 0; }
 .hint { color: var(--text-faint); font-size: 12px; }
-.qc-legend { display: flex; gap: 14px; }
-.qc-leg { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); }
-.qc-leg i { width: 12px; height: 3px; border-radius: 2px; display: inline-block; }
+.qc-legend { display: flex; gap: 18px; flex-wrap: wrap; }
+.qc-leg { display: flex; align-items: center; gap: 7px; font-size: 13.5px; font-weight: 600; color: var(--text); }
+.qc-leg i { width: 14px; height: 14px; border-radius: 4px; display: inline-block; }
+.qc-userlegend { gap: 10px 16px; margin-bottom: 10px; }
 
 .qc-chart-wrap { position: relative; }
 .qc-svg { width: 100%; height: auto; display: block; overflow: visible; }

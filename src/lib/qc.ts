@@ -24,9 +24,17 @@ export interface QcDailyPoint {
   buckets: QcBuckets;
 }
 
+/** One (date, QC user, count) row for the per-user productivity chart. */
+export interface UserDayRow {
+  date: string;
+  userId: string;
+  count: number;
+}
+
 export interface QcProductData {
   configured: boolean;
   daily: QcDailyPoint[]; // ALL days, ascending by date
+  userDaily: UserDayRow[]; // per-user processed counts (last 60 days)
 }
 
 export interface QcTrackerData {
@@ -57,16 +65,22 @@ function uuidFor(p: QcProduct): string | undefined {
   return process.env.METABASE_QC_VIDEO_UUID;
 }
 
+function userUuidFor(p: QcProduct): string | undefined {
+  if (p === "image") return process.env.METABASE_QC_USER_IMAGE_UUID;
+  if (p === "360") return process.env.METABASE_QC_USER_360_UUID;
+  return process.env.METABASE_QC_USER_VIDEO_UUID;
+}
+
 export async function buildQcTracker(now: Date, segment = "all"): Promise<QcTrackerData> {
   const results = await Promise.all(
     QC_PRODUCTS.map(async (p) => {
       const uuid = uuidFor(p);
-      if (!uuid) return { p, rows: null as RawDaily[] | null };
-      try {
-        return { p, rows: await fetchDaily(uuid) };
-      } catch {
-        return { p, rows: null };
-      }
+      const userUuid = userUuidFor(p);
+      const [rows, userRows] = await Promise.all([
+        uuid ? fetchDaily(uuid).catch(() => null) : Promise.resolve(null as RawDaily[] | null),
+        userUuid ? fetchUserDaily(userUuid).catch(() => [] as UserDayRow[]) : Promise.resolve([] as UserDayRow[]),
+      ]);
+      return { p, rows, userRows };
     })
   );
 
@@ -82,9 +96,9 @@ export async function buildQcTracker(now: Date, segment = "all"): Promise<QcTrac
 
   const products = {} as Record<QcProduct, QcProductData>;
   let asOf: string | null = null;
-  for (const { p, rows } of results) {
+  for (const { p, rows, userRows } of results) {
     if (!rows || !rows.length) {
-      products[p] = { configured: false, daily: [] };
+      products[p] = { configured: false, daily: [], userDaily: userRows };
       continue;
     }
     const filtered =
@@ -101,7 +115,7 @@ export async function buildQcTracker(now: Date, segment = "all"): Promise<QcTrac
         avgHrs: r.avgHrs,
         buckets: { under6: r.under6, h6_12: r.h6_12, over12: r.over12 },
       }));
-    products[p] = { configured: true, daily };
+    products[p] = { configured: true, daily, userDaily: userRows };
     if (daily.length) {
       const last = daily[daily.length - 1].date;
       if (!asOf || last > asOf) asOf = last;
@@ -169,6 +183,29 @@ function parseDaily(text: string): RawDaily[] {
       over12: cnt(iO12),
       segment: iSeg >= 0 ? (f[iSeg] || "").trim() || null : null,
     });
+  }
+  return out;
+}
+
+async function fetchUserDaily(uuid: string): Promise<UserDayRow[]> {
+  const base = (process.env.METABASE_URL || "https://metabase.spyne.ai").replace(/\/$/, "");
+  const res = await fetch(`${base}/public/question/${encodeURIComponent(uuid)}.csv`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`QC user fetch failed: ${res.status}`);
+  const lines = (await res.text()).split("\n").filter((l) => l.trim().length);
+  if (lines.length < 2) return [];
+  const header = lines[0].split(",").map((h) => h.trim().toLowerCase());
+  const find = (...pred: ((h: string) => boolean)[]) => header.findIndex((h) => pred.some((p) => p(h)));
+  const iDay = find((h) => h === "day", (h) => h.includes("day"), (h) => h.includes("date"));
+  const iUser = find((h) => h.includes("user"));
+  const iCnt = find((h) => h.includes("processed"), (h) => h.includes("count"), (h) => h.includes("cnt"));
+  const out: UserDayRow[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const f = lines[i].split(",");
+    const date = (f[iDay] || "").trim().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    const userId = (f[iUser] || "").trim() || "unknown";
+    const count = Math.round(parseFloat((f[iCnt] || "").trim()) || 0);
+    if (count > 0) out.push({ date, userId, count });
   }
   return out;
 }

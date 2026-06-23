@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 
-import type { QcProduct, QcProductData, QcDailyPoint, QcTrackerData } from "@/lib/qc";
+import type { QcProduct, QcProductData, QcDailyPoint, QcTrackerData, UserDayRow } from "@/lib/qc";
 
 const TABS: { key: QcProduct; label: string }[] = [
   { key: "image", label: "Image" },
@@ -147,7 +147,108 @@ function ProductView({ product, asOf, name }: { product: QcProductData; asOf: st
       <ChartCard title={`Average QC time — ${name}`} daily={daily} asOf={asOf} kind="line" />
       <ChartCard title="Resolution time buckets" daily={daily} asOf={asOf} kind="buckets" />
       <ChartCard title="Throughput" daily={daily} asOf={asOf} kind="throughput" />
+      <UserProductivityCard userDaily={product.userDaily} />
     </>
+  );
+}
+
+/* ----- per-QC-user productivity (stacked by user, last 60 days) ----- */
+const USER_PALETTE = ["#6d5cff", "#0ea5e9", "#22c55e", "#f59e0b", "#ef4444", "#a855f7", "#14b8a6", "#ec4899"];
+
+function UserProductivityCard({ userDaily }: { userDaily: UserDayRow[] }) {
+  return (
+    <div className="card qc-chart-card">
+      <div className="qc-chart-head">
+        <h2>QC user productivity</h2>
+        <span className="hint">SKUs processed per QC user · last 60 days</span>
+      </div>
+      {userDaily.length ? (
+        <UserProductivityChart userDaily={userDaily} />
+      ) : (
+        <div className="qc-empty">Connect the per-user productivity question to populate this (see chat for the SQL).</div>
+      )}
+    </div>
+  );
+}
+
+function UserProductivityChart({ userDaily }: { userDaily: UserDayRow[] }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const { dates, users, byDate } = useMemo(() => {
+    const dateSet = Array.from(new Set(userDaily.map((r) => r.date))).sort();
+    const totals = new Map<string, number>();
+    for (const r of userDaily) totals.set(r.userId, (totals.get(r.userId) || 0) + r.count);
+    const ranked = [...totals.entries()].sort((a, b) => b[1] - a[1]);
+    const TOPN = 8;
+    const top = ranked.slice(0, TOPN).map(([u]) => u);
+    const topSet = new Set(top);
+    const byDate = new Map<string, Record<string, number>>();
+    for (const r of userDaily) {
+      const key = topSet.has(r.userId) ? r.userId : "__others__";
+      const m = byDate.get(r.date) || {};
+      m[key] = (m[key] || 0) + r.count;
+      byDate.set(r.date, m);
+    }
+    const users = ranked.length > TOPN ? [...top, "__others__"] : top;
+    return { dates: dateSet, users, byDate };
+  }, [userDaily]);
+
+  const color = (u: string, i: number) => (u === "__others__" ? "var(--text-faint)" : USER_PALETTE[i % USER_PALETTE.length]);
+  const label = (u: string) => (u === "__others__" ? "Others" : u.length > 10 ? u.slice(0, 10) : u);
+
+  const W = 860, H = 320, PADL = 46, PADR = 12, PADT = 16, PADB = 34;
+  const iw = W - PADL - PADR, ih = H - PADT - PADB;
+  const n = dates.length;
+  const totalsByDate = dates.map((d) => users.reduce((a, u) => a + ((byDate.get(d) || {})[u] || 0), 0));
+  const yMax = niceMax(Math.max(1, ...totalsByDate));
+  const groupW = iw / Math.max(1, n);
+  const barW = Math.min(16, groupW * 0.72);
+  const y = (vv: number) => PADT + ih - (ih * vv) / yMax;
+  const grid = [0, 0.5, 1].map((f) => yMax * f);
+  const showX = (i: number) => n <= 12 || i % Math.ceil(n / 12) === 0 || i === n - 1;
+  const cx = (i: number) => PADL + groupW * (i + 0.5);
+
+  return (
+    <div className="qc-chart-wrap">
+      <div className="qc-legend qc-userlegend">
+        {users.map((u, i) => <span key={u} className="qc-leg"><i style={{ background: color(u, i) }} />{label(u)}</span>)}
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="qc-svg" onMouseLeave={() => setHover(null)}>
+        {grid.map((g, i) => (
+          <g key={i}><line x1={PADL} y1={y(g)} x2={W - PADR} y2={y(g)} className="qc-grid" />
+            <text x={PADL - 8} y={y(g) + 4} className="qc-axis" textAnchor="end">{fmtCompact(g)}</text></g>
+        ))}
+        {dates.map((d, di) => {
+          const m = byDate.get(d) || {};
+          const x = cx(di) - barW / 2;
+          let cum = 0;
+          return (
+            <g key={d}>
+              {users.map((u, ui) => {
+                const val = m[u] || 0;
+                if (val <= 0) return null;
+                const top = y(cum + val), h = (ih * val) / yMax;
+                cum += val;
+                return <rect key={u} x={x} y={top} width={barW} height={h} fill={color(u, ui)} className="qc-gbar"><title>{`${d} · ${label(u)}: ${val}`}</title></rect>;
+              })}
+              {showX(di) && <text x={cx(di)} y={H - 12} className="qc-axis" textAnchor="middle">{d.slice(5)}</text>}
+            </g>
+          );
+        })}
+        {hover != null && <line x1={cx(hover)} y1={PADT} x2={cx(hover)} y2={PADT + ih} className="qc-guide" />}
+        {dates.map((_, i) => <rect key={i} x={PADL + groupW * i} y={PADT} width={groupW} height={ih} fill="transparent" onMouseEnter={() => setHover(i)} />)}
+      </svg>
+      {hover != null && (() => {
+        const d = dates[hover], m = byDate.get(d) || {};
+        const tot = users.reduce((a, u) => a + (m[u] || 0), 0);
+        return (
+          <div className="qc-tooltip" style={{ left: `${(cx(hover) / W) * 100}%` }}>
+            <div className="qc-tt-day">{d}</div>
+            {users.filter((u) => (m[u] || 0) > 0).map((u) => <div key={u} className="qc-tt-row"><span>{label(u)}</span><b>{fmtInt(m[u])}</b></div>)}
+            <div className="qc-tt-row" style={{ borderTop: "1px solid var(--border)", marginTop: 4, paddingTop: 4 }}><span>Total</span><b>{fmtInt(tot)}</b></div>
+          </div>
+        );
+      })()}
+    </div>
   );
 }
 
@@ -393,14 +494,15 @@ function BucketsView({ v }: { v: ViewModel }) {
     );
   }
 
-  // non-comparison -> per-day STACKED bars (scales to 7 / 30 / 60 days)
+  // non-comparison -> per-day GROUPED bars: 3 distinct columns (<6h / 6-12h / >12h)
   const W = 860, H = 300, PADL = 46, PADR = 12, PADT = 24, PADB = 34;
   const iw = W - PADL - PADR, ih = H - PADT - PADB;
-  const totals = v.current.map((p) => (p ? p.buckets.under6 + p.buckets.h6_12 + p.buckets.over12 : 0));
-  const yMax = niceMax(Math.max(1, ...totals));
+  const max = Math.max(1, ...v.current.flatMap((p) => segs.map((s) => p?.buckets[s.key] ?? 0)));
+  const yMax = niceMax(max);
   const n = v.slots.length;
   const groupW = iw / Math.max(1, n);
-  const barW = Math.min(30, groupW * 0.7);
+  const barW = Math.min(20, (groupW * 0.74) / 3);
+  const gap = barW * 0.18;
   const y = (vv: number) => PADT + ih - (ih * vv) / yMax;
   const grid = [0, 0.25, 0.5, 0.75, 1].map((f) => yMax * f);
   const showLbl = n <= 14;
@@ -413,23 +515,19 @@ function BucketsView({ v }: { v: ViewModel }) {
           <text x={PADL - 8} y={y(g) + 4} className="qc-axis" textAnchor="end">{fmtCompact(g)}</text></g>
       ))}
       {v.slots.map((s, gi) => {
-        const p = v.current[gi];
-        const parts = [
-          { v: p?.buckets.under6 ?? 0, c: "var(--good)" },
-          { v: p?.buckets.h6_12 ?? 0, c: "var(--warn)" },
-          { v: p?.buckets.over12 ?? 0, c: "var(--danger)" },
-        ];
-        const tot = parts.reduce((a, x) => a + x.v, 0);
-        const center = PADL + groupW * (gi + 0.5), x = center - barW / 2;
-        let cum = 0;
+        const center = PADL + groupW * (gi + 0.5);
+        const totalW = 3 * barW + 2 * gap, start = center - totalW / 2;
         return (
           <g key={s.key}>
-            {parts.map((pt, si) => {
-              const top = y(cum + pt.v), h = (ih * pt.v) / yMax;
-              cum += pt.v;
-              return pt.v > 0 ? <rect key={si} x={x} y={top} width={barW} height={h} fill={pt.c} className="qc-gbar"><title>{`${s.label}: ${pt.v}`}</title></rect> : null;
+            {segs.map((sg, si) => {
+              const val = v.current[gi]?.buckets[sg.key] ?? 0, xx = start + si * (barW + gap), top = y(val);
+              return (
+                <g key={sg.key}>
+                  <rect x={xx} y={top} width={barW} height={Math.max(0, PADT + ih - top)} rx={3} fill={sg.color} className="qc-gbar"><title>{`${s.label} ${sg.label}: ${val}`}</title></rect>
+                  {showLbl && val > 0 && <text x={xx + barW / 2} y={top - 4} className="qc-blabel" textAnchor="middle">{fmtCompact(val)}</text>}
+                </g>
+              );
             })}
-            {showLbl && tot > 0 && <text x={center} y={y(tot) - 4} className="qc-blabel" textAnchor="middle">{fmtCompact(tot)}</text>}
             {showX(gi) && <text x={center} y={H - 12} className="qc-axis" textAnchor="middle">{s.label}</text>}
           </g>
         );
