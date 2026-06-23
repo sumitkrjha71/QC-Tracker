@@ -29,12 +29,15 @@ export interface UserDayRow {
   date: string;
   userId: string;
   count: number;
+  segment: string | null;
 }
 
 export interface QcProductData {
   configured: boolean;
-  daily: QcDailyPoint[]; // ALL days, ascending by date
-  userDaily: UserDayRow[]; // per-user processed counts (last 60 days)
+  daily: QcDailyPoint[]; // ALL days, ascending (filtered to selected segment)
+  userDaily: UserDayRow[]; // per-user processed counts (filtered to selected segment)
+  /** Per-segment daily series — present only when segment = "all" (for overlay). */
+  dailyBySegment?: { segment: string; daily: QcDailyPoint[] }[];
 }
 
 export interface QcTrackerData {
@@ -97,25 +100,31 @@ export async function buildQcTracker(now: Date, segment = "all"): Promise<QcTrac
   const products = {} as Record<QcProduct, QcProductData>;
   let asOf: string | null = null;
   for (const { p, rows, userRows } of results) {
+    // user rows: filter by segment when the user question carries a segment column
+    const userHasSeg = userRows.some((r) => r.segment);
+    const userDaily =
+      segment !== "all" && userHasSeg
+        ? userRows.filter((r) => (r.segment || "").toLowerCase() === segment.toLowerCase())
+        : userRows;
+
     if (!rows || !rows.length) {
-      products[p] = { configured: false, daily: [], userDaily: userRows };
+      products[p] = { configured: false, daily: [], userDaily };
       continue;
     }
     const filtered =
       segment !== "all" && hasSegmentColumn
         ? rows.filter((r) => (r.segment || "").toLowerCase() === segment.toLowerCase())
         : rows;
-    const daily = mergeByDate(filtered)
-      .sort((a, b) => (a.date < b.date ? -1 : 1))
-      .map<QcDailyPoint>((r) => ({
-        date: r.date,
-        label: DOW[new Date(`${r.date}T00:00:00Z`).getUTCDay()],
-        throughput: r.throughput,
-        medianHrs: r.medianHrs,
-        avgHrs: r.avgHrs,
-        buckets: { under6: r.under6, h6_12: r.h6_12, over12: r.over12 },
-      }));
-    products[p] = { configured: true, daily, userDaily: userRows };
+    const daily = toSeries(filtered);
+
+    // per-segment daily series for the "all segments" overlay on the first graph
+    let dailyBySegment: { segment: string; daily: QcDailyPoint[] }[] | undefined;
+    if (segment === "all" && hasSegmentColumn) {
+      const present = Array.from(new Set(rows.map((r) => r.segment).filter(Boolean))) as string[];
+      dailyBySegment = present.sort().map((sg) => ({ segment: sg, daily: toSeries(rows.filter((r) => r.segment === sg)) }));
+    }
+
+    products[p] = { configured: true, daily, userDaily, dailyBySegment };
     if (daily.length) {
       const last = daily[daily.length - 1].date;
       if (!asOf || last > asOf) asOf = last;
@@ -198,6 +207,7 @@ async function fetchUserDaily(uuid: string): Promise<UserDayRow[]> {
   const iDay = find((h) => h === "day", (h) => h.includes("day"), (h) => h.includes("date"));
   const iUser = find((h) => h.includes("user"));
   const iCnt = find((h) => h.includes("processed"), (h) => h.includes("count"), (h) => h.includes("cnt"));
+  const iSeg = find((h) => h.includes("segment"), (h) => h.includes("tier"), (h) => h === "type");
   const out: UserDayRow[] = [];
   for (let i = 1; i < lines.length; i++) {
     const f = lines[i].split(",");
@@ -205,9 +215,24 @@ async function fetchUserDaily(uuid: string): Promise<UserDayRow[]> {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
     const userId = (f[iUser] || "").trim() || "unknown";
     const count = Math.round(parseFloat((f[iCnt] || "").trim()) || 0);
-    if (count > 0) out.push({ date, userId, count });
+    const segment = iSeg >= 0 ? (f[iSeg] || "").trim() || null : null;
+    if (count > 0) out.push({ date, userId, count, segment });
   }
   return out;
+}
+
+/** Merge raw rows -> ascending QcDailyPoint series (collapses dupes per date). */
+function toSeries(rows: RawDaily[]): QcDailyPoint[] {
+  return mergeByDate(rows)
+    .sort((a, b) => (a.date < b.date ? -1 : 1))
+    .map<QcDailyPoint>((r) => ({
+      date: r.date,
+      label: DOW[new Date(`${r.date}T00:00:00Z`).getUTCDay()],
+      throughput: r.throughput,
+      medianHrs: r.medianHrs,
+      avgHrs: r.avgHrs,
+      buckets: { under6: r.under6, h6_12: r.h6_12, over12: r.over12 },
+    }));
 }
 
 /** Collapse multiple rows per date (e.g. several segments under "all"). */

@@ -89,7 +89,7 @@ export default function QcTracker() {
 
       {data && product && (
         product.configured && product.daily.length
-          ? <ProductView product={product} asOf={data.asOf!} />
+          ? <ProductView product={product} asOf={data.asOf!} segment={data.segment} />
           : <div className="qc-note"><b>{TABS.find((t) => t.key === tab)!.label}</b> QC question isn&apos;t connected yet.{tab === "video" ? " Share the video QC question's public link and I'll wire this tab." : " Check the question's public sharing / env UUID."}</div>
       )}
     </div>
@@ -97,7 +97,9 @@ export default function QcTracker() {
 }
 
 /* -------------------------------------------------------------------------- */
-function ProductView({ product, asOf }: { product: QcProductData; asOf: string }) {
+const SEG_PALETTE = ["#0ea5e9", "#22c55e", "#f59e0b", "#ef4444", "#a855f7", "#14b8a6", "#eab308"];
+
+function ProductView({ product, asOf, segment }: { product: QcProductData; asOf: string; segment: string }) {
   const daily = product.daily;
 
   const k = useMemo(() => {
@@ -127,6 +129,16 @@ function ProductView({ product, asOf }: { product: QcProductData; asOf: string }
   const tatDays: DayValue[] = useMemo(() => daily.map((d) => ({ date: d.date, value: d.avgHrs })), [daily]);
   const thrDays: DayValue[] = useMemo(() => daily.map((d) => ({ date: d.date, value: d.throughput })), [daily]);
 
+  // when "All segments" is selected, overlay each segment's avg-QC line on the first graph
+  const segOverlays = useMemo(() => {
+    if (segment !== "all" || !product.dailyBySegment) return undefined;
+    return product.dailyBySegment.map((s, i) => ({
+      label: segLabel(s.segment),
+      color: SEG_PALETTE[i % SEG_PALETTE.length],
+      days: s.daily.map((d) => ({ date: d.date, value: d.avgHrs })),
+    }));
+  }, [segment, product.dailyBySegment]);
+
   return (
     <>
       <div className="grid qc-kpis">
@@ -136,7 +148,7 @@ function ProductView({ product, asOf }: { product: QcProductData; asOf: string }
         <Kpi label="Weekly QC'd" value={fmtInt(k.weeklyQcd)} sub="SKUs · last 7 days" />
       </div>
 
-      <MetricChart title="Average QC time" days={tatDays} asOf={asOf} fmt={fmtHrs} labelFmt={fmtHrsShort} defaultType="line" />
+      <MetricChart title="Average QC time" days={tatDays} asOf={asOf} fmt={fmtHrs} labelFmt={fmtHrsShort} defaultType="line" overlays={segOverlays} overlayMainLabel="All (total)" />
       <BucketsCard daily={daily} asOf={asOf} />
       <MetricChart title="Throughput per day" days={thrDays} asOf={asOf} fmt={fmtInt} labelFmt={fmtCompact} defaultType="bar" />
       <MetricChart
@@ -160,14 +172,19 @@ function ThroughputKpi({ today, delta }: { today: number | null; delta: number |
 }
 
 /* ----- unified metric chart: line<->bar toggle, 4 views, trendline, labels ----- */
-function MetricChart({ title, hint, days, asOf, fmt, labelFmt, defaultType }: {
+function MetricChart({ title, hint, days, asOf, fmt, labelFmt, defaultType, overlays, overlayMainLabel }: {
   title: string; hint?: string; days: DayValue[]; asOf: string;
   fmt: (n: number | null) => string; labelFmt: (n: number) => string; defaultType: ChartType;
+  overlays?: { label: string; color: string; days: DayValue[] }[]; overlayMainLabel?: string;
 }) {
   const [view, setView] = useState<View>("7d");
   const [type, setType] = useState<ChartType>(defaultType);
   const v = useMemo(() => buildView(days, view, asOf), [days, view, asOf]);
-
+  const overlayViews = useMemo(
+    () => overlays?.map((o) => ({ label: o.label, color: o.color, v: buildView(o.days, view, asOf) })),
+    [overlays, view, asOf]
+  );
+  const showOverlays = !!overlayViews && type === "line";
   const hasData = v.current.some((p) => p && p.value != null);
 
   return (
@@ -184,26 +201,32 @@ function MetricChart({ title, hint, days, asOf, fmt, labelFmt, defaultType }: {
           </div>
         </div>
       </div>
-      {v.previous && (
+      {showOverlays ? (
+        <div className="qc-legend qc-cmp-legend">
+          <span className="qc-leg"><i style={{ background: "var(--accent)", height: 5 }} />{overlayMainLabel || "Total"}</span>
+          {overlayViews!.map((o) => <span key={o.label} className="qc-leg"><i style={{ background: o.color }} />{o.label}</span>)}
+          <span className="qc-leg"><i style={{ background: "var(--warn)" }} />Trend</span>
+        </div>
+      ) : v.previous ? (
         <div className="qc-legend qc-cmp-legend">
           <span className="qc-leg"><i style={{ background: "var(--accent)" }} />{v.curLabel}</span>
           <span className="qc-leg"><i style={{ background: "var(--text-faint)" }} />{v.prevLabel}</span>
           <span className="qc-leg"><i style={{ background: "var(--warn)" }} />Trend</span>
         </div>
-      )}
-      {hint && !hasData ? <div className="qc-empty">{hint}</div> : <SeriesPlot v={v} type={type} fmt={fmt} labelFmt={labelFmt} />}
+      ) : null}
+      {hint && !hasData ? <div className="qc-empty">{hint}</div> : <SeriesPlot v={v} type={type} fmt={fmt} labelFmt={labelFmt} overlays={showOverlays ? overlayViews : undefined} />}
     </div>
   );
 }
 
-function SeriesPlot({ v, type, fmt, labelFmt }: { v: DayView<DayValue>; type: ChartType; fmt: (n: number | null) => string; labelFmt: (n: number) => string }) {
+function SeriesPlot({ v, type, fmt, labelFmt, overlays }: { v: DayView<DayValue>; type: ChartType; fmt: (n: number | null) => string; labelFmt: (n: number) => string; overlays?: { label: string; color: string; v: DayView<DayValue> }[] }) {
   const [hover, setHover] = useState<number | null>(null);
   const [gid] = useState(() => "qcg" + Math.random().toString(36).slice(2, 8));
   const W = 860, H = 300, PADL = 50, PADR = 16, PADT = 22, PADB = 34;
   const iw = W - PADL - PADR, ih = H - PADT - PADB;
   const val = (p: DayValue | null) => (p ? p.value : null);
   const cmp = !!v.previous;
-  const all = [...v.current, ...(v.previous || [])].map(val).filter((x): x is number => x != null);
+  const all = [...v.current, ...(v.previous || []), ...(overlays?.flatMap((o) => o.v.current) || [])].map(val).filter((x): x is number => x != null);
   const yMax = niceMax(Math.max(0.0001, ...all));
   const n = v.slots.length;
   const x = (i: number) => PADL + (n <= 1 ? iw / 2 : (iw * i) / (n - 1));
@@ -252,16 +275,17 @@ function SeriesPlot({ v, type, fmt, labelFmt }: { v: DayView<DayValue>; type: Ch
           })
         ) : (
           <>
-            {!cmp && <path d={`${linePath(v.current)} L${x(n - 1).toFixed(1)},${(PADT + ih).toFixed(1)} L${x(v.current.findIndex((p) => val(p) != null)).toFixed(1)},${(PADT + ih).toFixed(1)} Z`} fill={`url(#${gid})`} />}
+            {!cmp && !overlays && <path d={`${linePath(v.current)} L${x(n - 1).toFixed(1)},${(PADT + ih).toFixed(1)} L${x(v.current.findIndex((p) => val(p) != null)).toFixed(1)},${(PADT + ih).toFixed(1)} Z`} fill={`url(#${gid})`} />}
+            {overlays?.map((o) => <path key={o.label} d={linePath(o.v.current)} fill="none" stroke={o.color} strokeWidth={1.5} opacity={0.6} strokeLinejoin="round" strokeLinecap="round" />)}
             {v.previous && <path d={linePath(v.previous)} fill="none" stroke="var(--text-faint)" strokeWidth={1.6} strokeLinejoin="round" strokeLinecap="round" />}
-            <path d={linePath(v.current)} fill="none" stroke="var(--accent)" strokeWidth={2.6} strokeLinejoin="round" strokeLinecap="round" />
+            <path d={linePath(v.current)} fill="none" stroke="var(--accent)" strokeWidth={overlays ? 3.6 : 2.6} strokeLinejoin="round" strokeLinecap="round" />
             {v.current.map((p, i) => val(p) != null && <circle key={i} cx={x(i)} cy={y(val(p)!)} r={hover === i ? 4.5 : 2.4} fill="var(--accent)" />)}
             {v.current.map((p, i) => val(p) != null && <text key={`l${i}`} x={x(i)} y={y(val(p)!) - 9} className="qc-dlabel" textAnchor="middle">{labelFmt(val(p)!)}</text>)}
           </>
         )}
 
         {/* trendline */}
-        {tl && <line x1={x(0)} y1={y(Math.max(0, Math.min(yMax, tl.b)))} x2={x(n - 1)} y2={y(Math.max(0, Math.min(yMax, tl.b + tl.m * (n - 1))))} stroke="var(--warn)" strokeWidth={2} strokeDasharray="6 4" opacity={0.9} />}
+        {tl && <line x1={x(0)} y1={y(Math.max(0, Math.min(yMax, tl.b)))} x2={x(n - 1)} y2={y(Math.max(0, Math.min(yMax, tl.b + tl.m * (n - 1))))} stroke="var(--warn)" strokeWidth={overlays ? 3 : 2} strokeDasharray="6 4" opacity={1} />}
 
         {hover != null && <line x1={x(hover)} y1={PADT} x2={x(hover)} y2={PADT + ih} className="qc-guide" />}
         {v.slots.map((_, i) => <rect key={i} x={x(i) - iw / (2 * Math.max(1, n - 1))} y={PADT} width={iw / Math.max(1, n - 1)} height={ih} fill="transparent" onMouseEnter={() => setHover(i)} />)}
