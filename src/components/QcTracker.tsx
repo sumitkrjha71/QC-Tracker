@@ -144,7 +144,7 @@ function ProductView({ product, asOf, name }: { product: QcProductData; asOf: st
       </div>
 
       <ChartCard title={`Average QC time — ${name}`} daily={daily} asOf={asOf} kind="line" />
-      <ChartCard title="Resolution time" daily={daily} asOf={asOf} kind="buckets" />
+      <ChartCard title="Resolution time buckets" daily={daily} asOf={asOf} kind="buckets" />
       <ChartCard title="Throughput" daily={daily} asOf={asOf} kind="throughput" />
     </>
   );
@@ -183,6 +183,13 @@ function ChartCard({ title, daily, asOf, kind }: { title: string; daily: QcDaily
         <div className="qc-legend qc-cmp-legend">
           <span className="qc-leg"><i style={{ background: "var(--accent)" }} />{v.curLabel}</span>
           <span className="qc-leg"><i style={{ background: "var(--text-faint)" }} />{v.prevLabel}</span>
+        </div>
+      )}
+      {kind === "buckets" && !v.previous && (
+        <div className="qc-legend" style={{ marginBottom: 8 }}>
+          <span className="qc-leg"><i style={{ background: "var(--good)" }} />&lt;6h</span>
+          <span className="qc-leg"><i style={{ background: "var(--warn)" }} />6–12h</span>
+          <span className="qc-leg"><i style={{ background: "var(--danger)" }} />&gt;12h</span>
         </div>
       )}
       {kind === "line" && <LineView v={v} accessor={(p) => p.avgHrs} unit="hrs" />}
