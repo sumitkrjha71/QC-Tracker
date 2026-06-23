@@ -148,7 +148,7 @@ function ProductView({ product, asOf, segment }: { product: QcProductData; asOf:
         <Kpi label="Weekly QC'd" value={fmtInt(k.weeklyQcd)} sub="SKUs · last 7 days" />
       </div>
 
-      <MetricChart title="Average QC time" days={tatDays} asOf={asOf} fmt={fmtHrs} labelFmt={fmtHrsShort} defaultType="line" overlays={segOverlays} overlayMainLabel="All (total)" />
+      <MetricChart title="Average QC time" days={tatDays} asOf={asOf} fmt={fmtHrs} labelFmt={fmtHrsShort} defaultType="line" overlays={segOverlays} overlayMainLabel="All (total)" yMaxCap={24} />
       <BucketsCard daily={daily} asOf={asOf} />
       <MetricChart title="Throughput per day" days={thrDays} asOf={asOf} fmt={fmtInt} labelFmt={fmtCompact} defaultType="bar" />
       <MetricChart
@@ -172,10 +172,10 @@ function ThroughputKpi({ today, delta }: { today: number | null; delta: number |
 }
 
 /* ----- unified metric chart: line<->bar toggle, 4 views, trendline, labels ----- */
-function MetricChart({ title, hint, days, asOf, fmt, labelFmt, defaultType, overlays, overlayMainLabel }: {
+function MetricChart({ title, hint, days, asOf, fmt, labelFmt, defaultType, overlays, overlayMainLabel, yMaxCap }: {
   title: string; hint?: string; days: DayValue[]; asOf: string;
   fmt: (n: number | null) => string; labelFmt: (n: number) => string; defaultType: ChartType;
-  overlays?: { label: string; color: string; days: DayValue[] }[]; overlayMainLabel?: string;
+  overlays?: { label: string; color: string; days: DayValue[] }[]; overlayMainLabel?: string; yMaxCap?: number;
 }) {
   const [view, setView] = useState<View>("7d");
   const [type, setType] = useState<ChartType>(defaultType);
@@ -214,12 +214,12 @@ function MetricChart({ title, hint, days, asOf, fmt, labelFmt, defaultType, over
           <span className="qc-leg"><i style={{ background: "var(--warn)" }} />Trend</span>
         </div>
       ) : null}
-      {hint && !hasData ? <div className="qc-empty">{hint}</div> : <SeriesPlot v={v} type={type} fmt={fmt} labelFmt={labelFmt} overlays={showOverlays ? overlayViews : undefined} mainLabel={overlayMainLabel} />}
+      {hint && !hasData ? <div className="qc-empty">{hint}</div> : <SeriesPlot v={v} type={type} fmt={fmt} labelFmt={labelFmt} overlays={showOverlays ? overlayViews : undefined} mainLabel={overlayMainLabel} yMaxCap={yMaxCap} />}
     </div>
   );
 }
 
-function SeriesPlot({ v, type, fmt, labelFmt, overlays, mainLabel }: { v: DayView<DayValue>; type: ChartType; fmt: (n: number | null) => string; labelFmt: (n: number) => string; overlays?: { label: string; color: string; v: DayView<DayValue> }[]; mainLabel?: string }) {
+function SeriesPlot({ v, type, fmt, labelFmt, overlays, mainLabel, yMaxCap }: { v: DayView<DayValue>; type: ChartType; fmt: (n: number | null) => string; labelFmt: (n: number) => string; overlays?: { label: string; color: string; v: DayView<DayValue> }[]; mainLabel?: string; yMaxCap?: number }) {
   const [hover, setHover] = useState<number | null>(null);
   const [gid] = useState(() => "qcg" + Math.random().toString(36).slice(2, 8));
   const W = 860, H = 300, PADL = 50, PADR = 16, PADT = 22, PADB = 34;
@@ -227,10 +227,11 @@ function SeriesPlot({ v, type, fmt, labelFmt, overlays, mainLabel }: { v: DayVie
   const val = (p: DayValue | null) => (p ? p.value : null);
   const cmp = !!v.previous;
   const all = [...v.current, ...(v.previous || []), ...(overlays?.flatMap((o) => o.v.current) || [])].map(val).filter((x): x is number => x != null);
-  const yMax = niceMax(Math.max(0.0001, ...all));
+  const rawMax = niceMax(Math.max(0.0001, ...all));
+  const yMax = yMaxCap != null ? Math.min(rawMax, yMaxCap) : rawMax; // cap axis (e.g. 24h)
   const n = v.slots.length;
   const x = (i: number) => PADL + (n <= 1 ? iw / 2 : (iw * i) / (n - 1));
-  const y = (vv: number) => PADT + ih - (ih * vv) / yMax;
+  const y = (vv: number) => PADT + ih - (ih * Math.min(vv, yMax)) / yMax; // clamp to cap
   const grid = [0, 0.25, 0.5, 0.75, 1].map((f) => yMax * f);
   const showX = (i: number) => n <= 14 || i % Math.ceil(n / 14) === 0 || i === n - 1;
   const dense = n > 20;
@@ -403,34 +404,56 @@ function BucketsView({ v, type }: { v: DayView<QcDailyPoint>; type: ChartType })
         {hover != null && (
           <div className="qc-tooltip" style={{ left: `${(x(hover) / W) * 100}%` }}>
             <div className="qc-tt-day">{v.slots[hover].label}</div>
-            {segs.map((sg) => <div key={sg.key} className="qc-tt-row"><span style={{ color: sg.color }}>{sg.label}</span><b>{fmtCompact(get(v.current[hover], sg.key))}</b></div>)}
+            {segs.map((sg) => <div key={sg.key} className="qc-tt-row"><span style={{ color: sg.color }}>{sg.label}</span><b>{fmtInt(get(v.current[hover], sg.key))}</b></div>)}
           </div>
         )}
       </div>
     );
   }
 
-  // bar view -> grouped 3 columns with labels
+  // bar view -> grouped 3 columns; LABEL = % of day total; TOOLTIP = counts
   const groupW = iw / Math.max(1, n);
   const barW = Math.min(20, (groupW * 0.74) / 3);
   const gap = barW * 0.18;
   const showLbl = n <= 14;
+  const cx = (i: number) => PADL + groupW * (i + 0.5);
+  const dayTot = (p: QcDailyPoint | null) => get(p, "under6") + get(p, "h6_12") + get(p, "over12");
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="qc-svg">
-      {grid.map((g, i) => (<g key={i}><line x1={PADL} y1={y(g)} x2={W - PADR} y2={y(g)} className="qc-grid" /><text x={PADL - 8} y={y(g) + 4} className="qc-axis" textAnchor="end">{fmtCompact(g)}</text></g>))}
-      {v.slots.map((s, gi) => {
-        const center = PADL + groupW * (gi + 0.5), totalW = 3 * barW + 2 * gap, start = center - totalW / 2;
+    <div className="qc-chart-wrap">
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="qc-svg" onMouseLeave={() => setHover(null)}>
+        {grid.map((g, i) => (<g key={i}><line x1={PADL} y1={y(g)} x2={W - PADR} y2={y(g)} className="qc-grid" /><text x={PADL - 8} y={y(g) + 4} className="qc-axis" textAnchor="end">{fmtCompact(g)}</text></g>))}
+        {v.slots.map((s, gi) => {
+          const p = v.current[gi], tot = dayTot(p);
+          const center = cx(gi), totalW = 3 * barW + 2 * gap, start = center - totalW / 2;
+          return (
+            <g key={s.key}>
+              {segs.map((sg, si) => {
+                const val = get(p, sg.key), xx = start + si * (barW + gap), top = y(val);
+                return (
+                  <g key={sg.key}>
+                    <rect x={xx} y={top} width={barW} height={Math.max(0, PADT + ih - top)} rx={3} fill={sg.color} className="qc-gbar" />
+                    {showLbl && val > 0 && tot > 0 && <text x={xx + barW / 2} y={top - 4} className="qc-blabel" textAnchor="middle">{Math.round((val / tot) * 100)}%</text>}
+                  </g>
+                );
+              })}
+              {showX(gi) && <text x={center} y={H - 12} className="qc-axis" textAnchor="middle">{s.label}</text>}
+            </g>
+          );
+        })}
+        {hover != null && <line x1={cx(hover)} y1={PADT} x2={cx(hover)} y2={PADT + ih} className="qc-guide" />}
+        {v.slots.map((_, i) => <rect key={i} x={PADL + groupW * i} y={PADT} width={groupW} height={ih} fill="transparent" onMouseEnter={() => setHover(i)} />)}
+      </svg>
+      {hover != null && (() => {
+        const p = v.current[hover], tot = dayTot(p);
         return (
-          <g key={s.key}>
-            {segs.map((sg, si) => {
-              const val = get(v.current[gi], sg.key), xx = start + si * (barW + gap), top = y(val);
-              return <g key={sg.key}><rect x={xx} y={top} width={barW} height={Math.max(0, PADT + ih - top)} rx={3} fill={sg.color} className="qc-gbar"><title>{`${s.label} ${sg.label}: ${val}`}</title></rect>{showLbl && val > 0 && <text x={xx + barW / 2} y={top - 4} className="qc-blabel" textAnchor="middle">{fmtCompact(val)}</text>}</g>;
-            })}
-            {showX(gi) && <text x={center} y={H - 12} className="qc-axis" textAnchor="middle">{s.label}</text>}
-          </g>
+          <div className="qc-tooltip" style={{ left: `${(cx(hover) / W) * 100}%` }}>
+            <div className="qc-tt-day">{v.slots[hover].label}</div>
+            {segs.map((sg) => <div key={sg.key} className="qc-tt-row"><span style={{ color: sg.color }}>{sg.label}</span><b>{fmtInt(get(p, sg.key))}</b></div>)}
+            <div className="qc-tt-row" style={{ borderTop: "1px solid var(--border)", marginTop: 4, paddingTop: 4 }}><span>Total</span><b>{fmtInt(tot)}</b></div>
+          </div>
         );
-      })}
-    </svg>
+      })()}
+    </div>
   );
 }
 
