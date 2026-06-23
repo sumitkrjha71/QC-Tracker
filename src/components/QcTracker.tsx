@@ -16,11 +16,12 @@ const SEG_LABEL: Record<string, string> = {
 };
 const segLabel = (s: string) => SEG_LABEL[s.toLowerCase()] || s;
 
-type View = "7d" | "7dcmp" | "mtd";
+type View = "7d" | "7dcmp" | "last30" | "last60";
 const VIEW_OPTS: { key: View; label: string }[] = [
   { key: "7d", label: "Last 7 days" },
   { key: "7dcmp", label: "7d vs prev" },
-  { key: "mtd", label: "Month-to-date" },
+  { key: "last30", label: "Last 30 days" },
+  { key: "last60", label: "Last 60 days" },
 ];
 
 export default function QcTracker() {
@@ -211,8 +212,6 @@ const DAY = 86400000;
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const parseUTC = (d: string) => new Date(`${d}T00:00:00Z`).getTime();
 const toDate = (ms: number) => new Date(ms).toISOString().slice(0, 10);
-const monShort = (ms: number) => new Date(ms).toLocaleString("en-US", { month: "short", timeZone: "UTC" });
-
 function buildView(daily: QcDailyPoint[], view: View, asOf: string): ViewModel {
   const map = new Map(daily.map((p) => [p.date, p]));
   const anchor = parseUTC(asOf);
@@ -230,19 +229,16 @@ function buildView(daily: QcDailyPoint[], view: View, asOf: string): ViewModel {
       ? { slots, current, previous: null, curLabel: "Last 7 days", prevLabel: null }
       : { slots, current, previous, curLabel: "This week", prevLabel: "Prev week" };
   }
-  // month-to-date vs last month
-  const a = new Date(anchor);
-  const y = a.getUTCFullYear(), m = a.getUTCMonth(), dom = a.getUTCDate();
+  // last 30 / last 60 days — single curve over the window
+  const days = view === "last60" ? 60 : 30;
   const slots: ViewModel["slots"] = [];
   const current: (QcDailyPoint | null)[] = [];
-  const previous: (QcDailyPoint | null)[] = [];
-  for (let day = 1; day <= dom; day++) {
-    slots.push({ key: String(day), label: String(day) });
-    current.push(map.get(toDate(Date.UTC(y, m, day))) || null);
-    const pms = Date.UTC(y, m - 1, day);
-    previous.push(new Date(pms).getUTCDate() === day ? map.get(toDate(pms)) || null : null);
+  for (let i = days - 1; i >= 0; i--) {
+    const ms = anchor - i * DAY;
+    slots.push({ key: toDate(ms), label: toDate(ms).slice(5) });
+    current.push(map.get(toDate(ms)) || null);
   }
-  return { slots, current, previous, curLabel: monShort(Date.UTC(y, m, 1)), prevLabel: monShort(Date.UTC(y, m - 1, 1)) };
+  return { slots, current, previous: null, curLabel: `Last ${days} days`, prevLabel: null };
 }
 
 /* ----- line view (avg QC) ----- */
@@ -333,7 +329,7 @@ function BarsView({ v, accessor }: { v: ViewModel; accessor: (p: QcDailyPoint) =
               return (
                 <g key={bi}>
                   <rect x={xx} y={top} width={barW} height={Math.max(0, PADT + ih - top)} rx={3} fill={b.color} className="qc-gbar"><title>{`${s.label}: ${b.vv}`}</title></rect>
-                  {!cmp && b.vv > 0 && <text x={xx + barW / 2} y={top - 4} className="qc-blabel" textAnchor="middle">{fmtCompact(b.vv)}</text>}
+                  {!cmp && b.vv > 0 && n <= 14 && <text x={xx + barW / 2} y={top - 4} className="qc-blabel" textAnchor="middle">{fmtCompact(b.vv)}</text>}
                 </g>
               );
             })}
@@ -397,17 +393,18 @@ function BucketsView({ v }: { v: ViewModel }) {
     );
   }
 
-  // 7d -> per-day grouped bars
+  // non-comparison -> per-day STACKED bars (scales to 7 / 30 / 60 days)
   const W = 860, H = 300, PADL = 46, PADR = 12, PADT = 24, PADB = 34;
   const iw = W - PADL - PADR, ih = H - PADT - PADB;
-  const max = Math.max(1, ...v.current.flatMap((p) => segs.map((s) => p?.buckets[s.key] ?? 0)));
-  const yMax = niceMax(max);
+  const totals = v.current.map((p) => (p ? p.buckets.under6 + p.buckets.h6_12 + p.buckets.over12 : 0));
+  const yMax = niceMax(Math.max(1, ...totals));
   const n = v.slots.length;
   const groupW = iw / Math.max(1, n);
-  const barW = Math.min(20, (groupW * 0.7) / 3);
-  const gap = barW * 0.18;
+  const barW = Math.min(30, groupW * 0.7);
   const y = (vv: number) => PADT + ih - (ih * vv) / yMax;
   const grid = [0, 0.25, 0.5, 0.75, 1].map((f) => yMax * f);
+  const showLbl = n <= 14;
+  const showX = (i: number) => n <= 12 || i % Math.ceil(n / 12) === 0 || i === n - 1;
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="qc-svg">
@@ -416,20 +413,24 @@ function BucketsView({ v }: { v: ViewModel }) {
           <text x={PADL - 8} y={y(g) + 4} className="qc-axis" textAnchor="end">{fmtCompact(g)}</text></g>
       ))}
       {v.slots.map((s, gi) => {
-        const center = PADL + groupW * (gi + 0.5);
-        const totalW = 3 * barW + 2 * gap, start = center - totalW / 2;
+        const p = v.current[gi];
+        const parts = [
+          { v: p?.buckets.under6 ?? 0, c: "var(--good)" },
+          { v: p?.buckets.h6_12 ?? 0, c: "var(--warn)" },
+          { v: p?.buckets.over12 ?? 0, c: "var(--danger)" },
+        ];
+        const tot = parts.reduce((a, x) => a + x.v, 0);
+        const center = PADL + groupW * (gi + 0.5), x = center - barW / 2;
+        let cum = 0;
         return (
           <g key={s.key}>
-            {segs.map((sg, si) => {
-              const val = v.current[gi]?.buckets[sg.key] ?? 0, xx = start + si * (barW + gap), top = y(val);
-              return (
-                <g key={sg.key}>
-                  <rect x={xx} y={top} width={barW} height={Math.max(0, PADT + ih - top)} rx={3} fill={sg.color} className="qc-gbar"><title>{`${s.label} ${sg.label}: ${val}`}</title></rect>
-                  {val > 0 && <text x={xx + barW / 2} y={top - 4} className="qc-blabel" textAnchor="middle">{fmtCompact(val)}</text>}
-                </g>
-              );
+            {parts.map((pt, si) => {
+              const top = y(cum + pt.v), h = (ih * pt.v) / yMax;
+              cum += pt.v;
+              return pt.v > 0 ? <rect key={si} x={x} y={top} width={barW} height={h} fill={pt.c} className="qc-gbar"><title>{`${s.label}: ${pt.v}`}</title></rect> : null;
             })}
-            <text x={center} y={H - 12} className="qc-axis" textAnchor="middle">{s.label}</text>
+            {showLbl && tot > 0 && <text x={center} y={y(tot) - 4} className="qc-blabel" textAnchor="middle">{fmtCompact(tot)}</text>}
+            {showX(gi) && <text x={center} y={H - 12} className="qc-axis" textAnchor="middle">{s.label}</text>}
           </g>
         );
       })}
