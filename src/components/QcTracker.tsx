@@ -214,12 +214,12 @@ function MetricChart({ title, hint, days, asOf, fmt, labelFmt, defaultType, over
           <span className="qc-leg"><i style={{ background: "var(--warn)" }} />Trend</span>
         </div>
       ) : null}
-      {hint && !hasData ? <div className="qc-empty">{hint}</div> : <SeriesPlot v={v} type={type} fmt={fmt} labelFmt={labelFmt} overlays={showOverlays ? overlayViews : undefined} />}
+      {hint && !hasData ? <div className="qc-empty">{hint}</div> : <SeriesPlot v={v} type={type} fmt={fmt} labelFmt={labelFmt} overlays={showOverlays ? overlayViews : undefined} mainLabel={overlayMainLabel} />}
     </div>
   );
 }
 
-function SeriesPlot({ v, type, fmt, labelFmt, overlays }: { v: DayView<DayValue>; type: ChartType; fmt: (n: number | null) => string; labelFmt: (n: number) => string; overlays?: { label: string; color: string; v: DayView<DayValue> }[] }) {
+function SeriesPlot({ v, type, fmt, labelFmt, overlays, mainLabel }: { v: DayView<DayValue>; type: ChartType; fmt: (n: number | null) => string; labelFmt: (n: number) => string; overlays?: { label: string; color: string; v: DayView<DayValue> }[]; mainLabel?: string }) {
   const [hover, setHover] = useState<number | null>(null);
   const [gid] = useState(() => "qcg" + Math.random().toString(36).slice(2, 8));
   const W = 860, H = 300, PADL = 50, PADR = 16, PADT = 22, PADB = 34;
@@ -280,7 +280,6 @@ function SeriesPlot({ v, type, fmt, labelFmt, overlays }: { v: DayView<DayValue>
             {v.previous && <path d={linePath(v.previous)} fill="none" stroke="var(--text-faint)" strokeWidth={1.6} strokeLinejoin="round" strokeLinecap="round" />}
             <path d={linePath(v.current)} fill="none" stroke="var(--accent)" strokeWidth={overlays ? 3.6 : 2.6} strokeLinejoin="round" strokeLinecap="round" />
             {v.current.map((p, i) => val(p) != null && <circle key={i} cx={x(i)} cy={y(val(p)!)} r={hover === i ? 4.5 : 2.4} fill="var(--accent)" />)}
-            {v.current.map((p, i) => val(p) != null && <text key={`l${i}`} x={x(i)} y={y(val(p)!) - 9} className="qc-dlabel" textAnchor="middle">{labelFmt(val(p)!)}</text>)}
           </>
         )}
 
@@ -293,8 +292,9 @@ function SeriesPlot({ v, type, fmt, labelFmt, overlays }: { v: DayView<DayValue>
       {hover != null && (
         <div className="qc-tooltip" style={{ left: `${(x(hover) / W) * 100}%` }}>
           <div className="qc-tt-day">{v.slots[hover].label}</div>
-          <div className="qc-tt-row"><span>{v.curLabel}</span><b>{fmt(val(v.current[hover]))}</b></div>
+          <div className="qc-tt-row"><span>{overlays ? (mainLabel || "Total") : v.curLabel}</span><b>{fmt(val(v.current[hover]))}</b></div>
           {v.previous && <div className="qc-tt-row"><span>{v.prevLabel}</span><b>{fmt(val(v.previous[hover]))}</b></div>}
+          {overlays?.map((o) => <div key={o.label} className="qc-tt-row"><span style={{ color: o.color }}>{o.label}</span><b>{fmt(val(o.v.current[hover]))}</b></div>)}
         </div>
       )}
       {dense && <div className="qc-densenote">Tip: many points — switch view to “Last 7 days” for clearer labels.</div>}
@@ -317,51 +317,51 @@ function trend(values: (number | null)[]): { m: number; b: number } | null {
   return { m, b: (sy - m * sx) / n };
 }
 
-/* ----- buckets card (its own; view toggle, no type toggle / trendline) ----- */
+/* ----- buckets card: bar<->line toggle (line = 3 bucket lines), 4 views ----- */
 function BucketsCard({ daily, asOf }: { daily: QcDailyPoint[]; asOf: string }) {
   const [view, setView] = useState<View>("7d");
+  const [type, setType] = useState<ChartType>("bar");
   const v = useMemo(() => buildView(daily, view, asOf), [daily, view, asOf]);
   return (
     <div className="card qc-chart-card">
       <div className="qc-chart-head">
         <h2>Resolution time buckets</h2>
-        <div className="qc-viewtoggle">
-          {VIEW_OPTS.map((o) => <button key={o.key} className={`qc-vbtn ${view === o.key ? "active" : ""}`} onClick={() => setView(o.key)}>{o.label}</button>)}
+        <div className="qc-chart-controls">
+          <div className="qc-typetoggle">
+            <button className={type === "line" ? "active" : ""} onClick={() => setType("line")} title="Line view"><LineIcon /></button>
+            <button className={type === "bar" ? "active" : ""} onClick={() => setType("bar")} title="Bar view"><BarIcon /></button>
+          </div>
+          <div className="qc-viewtoggle">
+            {VIEW_OPTS.map((o) => <button key={o.key} className={`qc-vbtn ${view === o.key ? "active" : ""}`} onClick={() => setView(o.key)}>{o.label}</button>)}
+          </div>
         </div>
       </div>
-      {v.previous
-        ? <BucketSummaryLegend />
-        : <div className="qc-legend" style={{ marginBottom: 8 }}>
-            <span className="qc-leg"><i style={{ background: "var(--good)" }} />&lt;6h</span>
-            <span className="qc-leg"><i style={{ background: "var(--warn)" }} />6–12h</span>
-            <span className="qc-leg"><i style={{ background: "var(--danger)" }} />&gt;12h</span>
-          </div>}
-      <BucketsView v={v} />
+      <div className="qc-legend" style={{ marginBottom: 8 }}>
+        <span className="qc-leg"><i style={{ background: "var(--good)" }} />&lt;6h</span>
+        <span className="qc-leg"><i style={{ background: "var(--warn)" }} />6–12h</span>
+        <span className="qc-leg"><i style={{ background: "var(--danger)" }} />&gt;12h</span>
+      </div>
+      <BucketsView v={v} type={type} />
     </div>
   );
 }
-const BucketSummaryLegend = () => (
-  <div className="qc-legend" style={{ marginBottom: 8 }}>
-    <span className="qc-leg"><i style={{ background: "var(--good)" }} />&lt;6h</span>
-    <span className="qc-leg"><i style={{ background: "var(--warn)" }} />6–12h</span>
-    <span className="qc-leg"><i style={{ background: "var(--danger)" }} />&gt;12h</span>
-  </div>
-);
 
-function BucketsView({ v }: { v: DayView<QcDailyPoint> }) {
+function BucketsView({ v, type }: { v: DayView<QcDailyPoint>; type: ChartType }) {
+  const [hover, setHover] = useState<number | null>(null);
   const segs = [
     { key: "under6" as const, color: "var(--good)", label: "<6h" },
     { key: "h6_12" as const, color: "var(--warn)", label: "6–12h" },
     { key: "over12" as const, color: "var(--danger)", label: ">12h" },
   ];
   const get = (p: QcDailyPoint | null, key: "under6" | "h6_12" | "over12") => (p ? p.buckets[key] : 0);
-  const sum = (arr: (QcDailyPoint | null)[]) => arr.reduce((a, p) => ({ under6: a.under6 + get(p, "under6"), h6_12: a.h6_12 + get(p, "h6_12"), over12: a.over12 + get(p, "over12") }), { under6: 0, h6_12: 0, over12: 0 });
-  const curTot = sum(v.current as (QcDailyPoint | null)[]);
+  const sumAll = (arr: (QcDailyPoint | null)[]) => arr.reduce((a, p) => ({ under6: a.under6 + get(p, "under6"), h6_12: a.h6_12 + get(p, "h6_12"), over12: a.over12 + get(p, "over12") }), { under6: 0, h6_12: 0, over12: 0 });
+  const curTot = sumAll(v.current);
   if (curTot.under6 + curTot.h6_12 + curTot.over12 === 0)
     return <div className="qc-empty">Buckets populate once the question includes <code>under_6h / h6_12 / over_12h</code>.</div>;
 
+  // comparison view -> stacked period totals (type ignored)
   if (v.previous) {
-    const rows = [{ name: v.curLabel, t: curTot }, { name: v.prevLabel || "Prev", t: sum(v.previous as (QcDailyPoint | null)[]) }];
+    const rows = [{ name: v.curLabel, t: curTot }, { name: v.prevLabel || "Prev", t: sumAll(v.previous) }];
     return (
       <div className="qc-stacks">
         {rows.map((r) => {
@@ -380,17 +380,41 @@ function BucketsView({ v }: { v: DayView<QcDailyPoint> }) {
 
   const W = 860, H = 300, PADL = 46, PADR = 12, PADT = 24, PADB = 34;
   const iw = W - PADL - PADR, ih = H - PADT - PADB;
-  const max = Math.max(1, ...(v.current as (QcDailyPoint | null)[]).flatMap((p) => segs.map((s) => get(p, s.key))));
-  const yMax = niceMax(max);
   const n = v.slots.length;
+  const yMax = niceMax(Math.max(1, ...v.current.flatMap((p) => segs.map((s) => get(p, s.key)))));
+  const y = (vv: number) => PADT + ih - (ih * vv) / yMax;
+  const grid = [0, 0.25, 0.5, 0.75, 1].map((f) => yMax * f);
+  const showX = (i: number) => n <= 14 || i % Math.ceil(n / 14) === 0 || i === n - 1;
+
+  // line view -> three bucket lines (no inline labels; tooltip shows all three)
+  if (type === "line") {
+    const x = (i: number) => PADL + (n <= 1 ? iw / 2 : (iw * i) / (n - 1));
+    const linePath = (key: "under6" | "h6_12" | "over12") => v.current.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(get(p, key)).toFixed(1)}`).join(" ");
+    return (
+      <div className="qc-chart-wrap">
+        <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="qc-svg" onMouseLeave={() => setHover(null)}>
+          {grid.map((g, i) => (<g key={i}><line x1={PADL} y1={y(g)} x2={W - PADR} y2={y(g)} className="qc-grid" /><text x={PADL - 8} y={y(g) + 4} className="qc-axis" textAnchor="end">{fmtCompact(g)}</text></g>))}
+          {v.slots.map((s, i) => showX(i) && <text key={i} x={x(i)} y={H - 12} className="qc-axis" textAnchor="middle">{s.label}</text>)}
+          {segs.map((sg) => <path key={sg.key} d={linePath(sg.key)} fill="none" stroke={sg.color} strokeWidth={2.4} strokeLinejoin="round" strokeLinecap="round" />)}
+          {segs.map((sg) => v.current.map((p, i) => <circle key={sg.key + i} cx={x(i)} cy={y(get(p, sg.key))} r={hover === i ? 3.6 : 2} fill={sg.color} />))}
+          {hover != null && <line x1={x(hover)} y1={PADT} x2={x(hover)} y2={PADT + ih} className="qc-guide" />}
+          {v.slots.map((_, i) => <rect key={i} x={x(i) - iw / (2 * Math.max(1, n - 1))} y={PADT} width={iw / Math.max(1, n - 1)} height={ih} fill="transparent" onMouseEnter={() => setHover(i)} />)}
+        </svg>
+        {hover != null && (
+          <div className="qc-tooltip" style={{ left: `${(x(hover) / W) * 100}%` }}>
+            <div className="qc-tt-day">{v.slots[hover].label}</div>
+            {segs.map((sg) => <div key={sg.key} className="qc-tt-row"><span style={{ color: sg.color }}>{sg.label}</span><b>{fmtCompact(get(v.current[hover], sg.key))}</b></div>)}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // bar view -> grouped 3 columns with labels
   const groupW = iw / Math.max(1, n);
   const barW = Math.min(20, (groupW * 0.74) / 3);
   const gap = barW * 0.18;
-  const y = (vv: number) => PADT + ih - (ih * vv) / yMax;
-  const grid = [0, 0.25, 0.5, 0.75, 1].map((f) => yMax * f);
   const showLbl = n <= 14;
-  const showX = (i: number) => n <= 14 || i % Math.ceil(n / 14) === 0 || i === n - 1;
-
   return (
     <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="qc-svg">
       {grid.map((g, i) => (<g key={i}><line x1={PADL} y1={y(g)} x2={W - PADR} y2={y(g)} className="qc-grid" /><text x={PADL - 8} y={y(g) + 4} className="qc-axis" textAnchor="end">{fmtCompact(g)}</text></g>))}
@@ -399,7 +423,7 @@ function BucketsView({ v }: { v: DayView<QcDailyPoint> }) {
         return (
           <g key={s.key}>
             {segs.map((sg, si) => {
-              const val = get(v.current[gi] as QcDailyPoint | null, sg.key), xx = start + si * (barW + gap), top = y(val);
+              const val = get(v.current[gi], sg.key), xx = start + si * (barW + gap), top = y(val);
               return <g key={sg.key}><rect x={xx} y={top} width={barW} height={Math.max(0, PADT + ih - top)} rx={3} fill={sg.color} className="qc-gbar"><title>{`${s.label} ${sg.label}: ${val}`}</title></rect>{showLbl && val > 0 && <text x={xx + barW / 2} y={top - 4} className="qc-blabel" textAnchor="middle">{fmtCompact(val)}</text>}</g>;
             })}
             {showX(gi) && <text x={center} y={H - 12} className="qc-axis" textAnchor="middle">{s.label}</text>}
