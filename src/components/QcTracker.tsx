@@ -399,6 +399,12 @@ function BucketsView({ v, type }: { v: DayView<QcDailyPoint>; type: ChartType })
           {grid.map((g, i) => (<g key={i}><line x1={PADL} y1={y(g)} x2={W - PADR} y2={y(g)} className="qc-grid" /><text x={PADL - 8} y={y(g) + 4} className="qc-axis" textAnchor="end">{fmtCompact(g)}</text></g>))}
           {v.slots.map((s, i) => showX(i) && <text key={i} x={x(i)} y={H - 12} className="qc-axis" textAnchor="middle">{s.label}</text>)}
           {segs.map((sg) => <path key={sg.key} d={linePath(sg.key)} fill="none" stroke={sg.color} strokeWidth={2.4} strokeLinejoin="round" strokeLinecap="round" />)}
+          {segs.map((sg) => {
+            const tl = trend(v.current.map((p) => get(p, sg.key)));
+            if (!tl) return null;
+            const cl = (vv: number) => Math.max(0, Math.min(yMax, vv));
+            return <line key={`t${sg.key}`} x1={x(0)} y1={y(cl(tl.b))} x2={x(n - 1)} y2={y(cl(tl.b + tl.m * (n - 1)))} stroke={sg.color} strokeWidth={1.6} strokeDasharray="6 4" opacity={0.85} />;
+          })}
           {segs.map((sg) => v.current.map((p, i) => <circle key={sg.key + i} cx={x(i)} cy={y(get(p, sg.key))} r={hover === i ? 3.6 : 2} fill={sg.color} />))}
           {hover != null && <line x1={x(hover)} y1={PADT} x2={x(hover)} y2={PADT + ih} className="qc-guide" />}
           {v.slots.map((_, i) => <rect key={i} x={x(i) - iw / (2 * Math.max(1, n - 1))} y={PADT} width={iw / Math.max(1, n - 1)} height={ih} fill="transparent" onMouseEnter={() => setHover(i)} />)}
