@@ -23,6 +23,9 @@ const VIEW_OPTS: { key: View; label: string }[] = [
   { key: "last30", label: "Last 30 days" },
   { key: "last60", label: "Last 60 days" },
 ];
+type ChartType = "line" | "bar";
+
+interface DayValue { date: string; value: number | null }
 
 export default function QcTracker() {
   const [data, setData] = useState<QcTrackerData | null>(null);
@@ -32,13 +35,8 @@ export default function QcTracker() {
   const [segment, setSegment] = useState("all");
   const [theme, setTheme] = useState<"dark" | "light">("dark");
 
-  useEffect(() => {
-    setTheme((localStorage.getItem("qc-theme") as "dark" | "light") || "dark");
-  }, []);
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    localStorage.setItem("qc-theme", theme);
-  }, [theme]);
+  useEffect(() => { setTheme((localStorage.getItem("qc-theme") as "dark" | "light") || "dark"); }, []);
+  useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem("qc-theme", theme); }, [theme]);
 
   useEffect(() => {
     let alive = true;
@@ -65,22 +63,16 @@ export default function QcTracker() {
     <div className="app qc">
       <div className="header">
         <div>
-          <h1>
-            QC Time Tracker
-            {data && <span className={`badge ${data.source === "metabase" ? "live" : "demo"}`}>{data.source === "metabase" ? "live" : "not configured"}</span>}
-          </h1>
+          <h1>QC Time Tracker{data && <span className={`badge ${data.source === "metabase" ? "live" : "demo"}`}>{data.source === "metabase" ? "live" : "not configured"}</span>}</h1>
           <div className="sub">Quality-control turnaround by product{data?.asOf && <> · as of {data.asOf}</>}</div>
         </div>
         <div className="qc-controls">
-          <label className="qc-seg">
-            <span>Segment</span>
+          <label className="qc-seg"><span>Segment</span>
             <select value={segment} onChange={(e) => setSegment(e.target.value)}>
               {segOptions.map((s) => <option key={s} value={s}>{segLabel(s)}</option>)}
             </select>
           </label>
-          <button className="qc-theme-btn" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} aria-label="Toggle theme">
-            {theme === "dark" ? "☀" : "☾"}
-          </button>
+          <button className="qc-theme-btn" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} aria-label="Toggle theme">{theme === "dark" ? "☀" : "☾"}</button>
         </div>
       </div>
 
@@ -96,23 +88,18 @@ export default function QcTracker() {
       {error && <div className="qc-error">⚠ {error}</div>}
 
       {data && product && (
-        product.configured && product.daily.length ? (
-          <ProductView product={product} asOf={data.asOf!} name={TABS.find((t) => t.key === tab)!.label} />
-        ) : (
-          <div className="qc-note">
-            <b>{TABS.find((t) => t.key === tab)!.label}</b> QC question isn&apos;t connected yet.
-            {tab === "video" ? " Share the video QC question's public link and I'll wire this tab." : " Check the question's public sharing / env UUID."}
-          </div>
-        )
+        product.configured && product.daily.length
+          ? <ProductView product={product} asOf={data.asOf!} />
+          : <div className="qc-note"><b>{TABS.find((t) => t.key === tab)!.label}</b> QC question isn&apos;t connected yet.{tab === "video" ? " Share the video QC question's public link and I'll wire this tab." : " Check the question's public sharing / env UUID."}</div>
       )}
     </div>
   );
 }
 
 /* -------------------------------------------------------------------------- */
-function ProductView({ product, asOf, name }: { product: QcProductData; asOf: string; name: string }) {
+function ProductView({ product, asOf }: { product: QcProductData; asOf: string }) {
   const daily = product.daily;
-  // KPIs from the last 7 days + today/yesterday
+
   const k = useMemo(() => {
     const v = buildView(daily, "7d", asOf);
     const cur = v.current.filter(Boolean) as QcDailyPoint[];
@@ -121,116 +108,43 @@ function ProductView({ product, asOf, name }: { product: QcProductData; asOf: st
       for (const p of cur) { const x = sel(p); if (x != null) { n += x * p.throughput; d += p.throughput; } }
       return d > 0 ? n / d : null;
     };
-    const today = v.current[6];
-    const yest = v.current[5];
-    const tThr = today?.throughput ?? null;
-    const yThr = yest?.throughput ?? null;
+    const today = v.current[6], yest = v.current[5];
+    const tThr = today?.throughput ?? null, yThr = yest?.throughput ?? null;
     const delta = tThr != null && yThr != null && yThr > 0 ? (tThr - yThr) / yThr : null;
-    return {
-      avgHrs: wAvg((p) => p.avgHrs),
-      medianHrs: wAvg((p) => p.medianHrs),
-      weeklyQcd: cur.reduce((a, p) => a + p.throughput, 0),
-      todayThr: tThr,
-      delta,
-    };
+    return { avgHrs: wAvg((p) => p.avgHrs), medianHrs: wAvg((p) => p.medianHrs), weeklyQcd: cur.reduce((a, p) => a + p.throughput, 0), todayThr: tThr, delta };
   }, [daily, asOf]);
+
+  const avgPerUserDays: DayValue[] = useMemo(() => {
+    const byDate = new Map<string, { total: number; users: Set<string> }>();
+    for (const r of product.userDaily) {
+      const e = byDate.get(r.date) || { total: 0, users: new Set<string>() };
+      e.total += r.count; e.users.add(r.userId); byDate.set(r.date, e);
+    }
+    return [...byDate.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))
+      .map(([date, e]) => ({ date, value: e.users.size ? e.total / e.users.size : null }));
+  }, [product.userDaily]);
+
+  const tatDays: DayValue[] = useMemo(() => daily.map((d) => ({ date: d.date, value: d.avgHrs })), [daily]);
+  const thrDays: DayValue[] = useMemo(() => daily.map((d) => ({ date: d.date, value: d.throughput })), [daily]);
 
   return (
     <>
       <div className="grid qc-kpis">
-        <Kpi label={`Avg QC time · ${name}`} value={fmtHrs(k.avgHrs)} sub="weighted, last 7 days" accent />
+        <Kpi label="Avg QC time" value={fmtHrs(k.avgHrs)} sub={`median ${fmtHrs(k.medianHrs)} · 7 days`} accent />
         <Kpi label="Median QC time" value={fmtHrs(k.medianHrs)} sub="last 7 days" />
         <ThroughputKpi today={k.todayThr} delta={k.delta} />
         <Kpi label="Weekly QC'd" value={fmtInt(k.weeklyQcd)} sub="SKUs · last 7 days" />
       </div>
 
-      <ChartCard title={`Average QC time — ${name}`} daily={daily} asOf={asOf} kind="line" />
-      <ChartCard title="Resolution time buckets" daily={daily} asOf={asOf} kind="buckets" />
-      <ChartCard title="Throughput" daily={daily} asOf={asOf} kind="throughput" />
-      <UserProductivityCard userDaily={product.userDaily} name={name} />
+      <MetricChart title="Average QC time" days={tatDays} asOf={asOf} fmt={fmtHrs} labelFmt={fmtHrsShort} defaultType="line" />
+      <BucketsCard daily={daily} asOf={asOf} />
+      <MetricChart title="Throughput per day" days={thrDays} asOf={asOf} fmt={fmtInt} labelFmt={fmtCompact} defaultType="bar" />
+      <MetricChart
+        title="Avg number of SKUs processed per QC user"
+        hint={product.userDaily.length ? undefined : "Connect the per-user productivity question (see chat)"}
+        days={avgPerUserDays} asOf={asOf} fmt={fmtInt} labelFmt={fmtCompact} defaultType="line"
+      />
     </>
-  );
-}
-
-/* ----- avg QC processed per user, per day (last 60 days) ----- */
-function UserProductivityCard({ userDaily, name }: { userDaily: UserDayRow[]; name: string }) {
-  return (
-    <div className="card qc-chart-card">
-      <div className="qc-chart-head">
-        <h2>Avg QC per user — {name}</h2>
-        <span className="hint">average SKUs processed per QC user, per day · last 60 days</span>
-      </div>
-      {userDaily.length ? (
-        <AvgPerUserChart userDaily={userDaily} />
-      ) : (
-        <div className="qc-empty">Connect the per-user productivity question to populate this (see chat for the SQL).</div>
-      )}
-    </div>
-  );
-}
-
-function AvgPerUserChart({ userDaily }: { userDaily: UserDayRow[] }) {
-  const [hover, setHover] = useState<number | null>(null);
-  const points = useMemo(() => {
-    const byDate = new Map<string, { total: number; users: Set<string> }>();
-    for (const r of userDaily) {
-      const e = byDate.get(r.date) || { total: 0, users: new Set<string>() };
-      e.total += r.count;
-      e.users.add(r.userId);
-      byDate.set(r.date, e);
-    }
-    return [...byDate.entries()]
-      .sort((a, b) => (a[0] < b[0] ? -1 : 1))
-      .map(([date, e]) => ({
-        date,
-        label: date.slice(5),
-        avg: e.users.size ? e.total / e.users.size : 0,
-        total: e.total,
-        users: e.users.size,
-      }));
-  }, [userDaily]);
-
-  const W = 860, H = 300, PADL = 46, PADR = 16, PADT = 20, PADB = 34;
-  const iw = W - PADL - PADR, ih = H - PADT - PADB;
-  const n = points.length;
-  const yMax = niceMax(Math.max(1, ...points.map((p) => p.avg)));
-  const x = (i: number) => PADL + (n <= 1 ? iw / 2 : (iw * i) / (n - 1));
-  const y = (v: number) => PADT + ih - (ih * v) / yMax;
-  const grid = [0, 0.25, 0.5, 0.75, 1].map((f) => yMax * f);
-  const showX = (i: number) => n <= 12 || i % Math.ceil(n / 12) === 0 || i === n - 1;
-  const path = points.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.avg).toFixed(1)}`).join(" ");
-  const area = n > 1 ? `${path} L${x(n - 1).toFixed(1)},${(PADT + ih).toFixed(1)} L${x(0).toFixed(1)},${(PADT + ih).toFixed(1)} Z` : "";
-
-  return (
-    <div className="qc-chart-wrap">
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="qc-svg" onMouseLeave={() => setHover(null)}>
-        <defs>
-          <linearGradient id="apuArea" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.28" />
-            <stop offset="100%" stopColor="var(--accent)" stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        {grid.map((g, i) => (
-          <g key={i}><line x1={PADL} y1={y(g)} x2={W - PADR} y2={y(g)} className="qc-grid" />
-            <text x={PADL - 8} y={y(g) + 4} className="qc-axis" textAnchor="end">{fmtCompact(g)}</text></g>
-        ))}
-        {points.map((p, i) => showX(i) && <text key={i} x={x(i)} y={H - 12} className="qc-axis" textAnchor="middle">{p.label}</text>)}
-        {area && <path d={area} fill="url(#apuArea)" />}
-        <path d={path} fill="none" stroke="var(--accent)" strokeWidth={2.6} strokeLinejoin="round" strokeLinecap="round" />
-        {points.map((p, i) => <circle key={i} cx={x(i)} cy={y(p.avg)} r={hover === i ? 4.5 : 2.4} fill="var(--accent)" />)}
-        {n <= 14 && points.map((p, i) => <text key={`l${i}`} x={x(i)} y={y(p.avg) - 9} className="qc-dlabel" textAnchor="middle">{Math.round(p.avg)}</text>)}
-        {hover != null && <line x1={x(hover)} y1={PADT} x2={x(hover)} y2={PADT + ih} className="qc-guide" />}
-        {points.map((_, i) => <rect key={i} x={x(i) - iw / (2 * Math.max(1, n - 1))} y={PADT} width={iw / Math.max(1, n - 1)} height={ih} fill="transparent" onMouseEnter={() => setHover(i)} />)}
-      </svg>
-      {hover != null && points[hover] && (
-        <div className="qc-tooltip" style={{ left: `${(x(hover) / W) * 100}%` }}>
-          <div className="qc-tt-day">{points[hover].date}</div>
-          <div className="qc-tt-row"><span>Avg / user</span><b>{Math.round(points[hover].avg).toLocaleString("en-US")}</b></div>
-          <div className="qc-tt-row"><span>Total</span><b>{fmtInt(points[hover].total)}</b></div>
-          <div className="qc-tt-row"><span>Active users</span><b>{points[hover].users}</b></div>
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -240,54 +154,243 @@ function ThroughputKpi({ today, delta }: { today: number | null; delta: number |
     <div className="qc-kpi">
       <span className="qc-kpi-label">Throughput · today</span>
       <div className="qc-kpi-value">{fmtInt(today)}</div>
-      <span className="qc-kpi-sub">
-        {delta == null ? "vs yesterday —" : (
-          <span className={up ? "qc-up" : "qc-down"}>{up ? "▲" : "▼"} {Math.abs(Math.round(delta * 100))}% vs yesterday</span>
-        )}
-      </span>
+      <span className="qc-kpi-sub">{delta == null ? "vs yesterday —" : <span className={up ? "qc-up" : "qc-down"}>{up ? "▲" : "▼"} {Math.abs(Math.round(delta * 100))}% vs yesterday</span>}</span>
     </div>
   );
 }
 
-/* ----- a chart card with its own view toggle ----- */
-function ChartCard({ title, daily, asOf, kind }: { title: string; daily: QcDailyPoint[]; asOf: string; kind: "line" | "buckets" | "throughput" }) {
+/* ----- unified metric chart: line<->bar toggle, 4 views, trendline, labels ----- */
+function MetricChart({ title, hint, days, asOf, fmt, labelFmt, defaultType }: {
+  title: string; hint?: string; days: DayValue[]; asOf: string;
+  fmt: (n: number | null) => string; labelFmt: (n: number) => string; defaultType: ChartType;
+}) {
   const [view, setView] = useState<View>("7d");
-  const v = useMemo(() => buildView(daily, view, asOf), [daily, view, asOf]);
+  const [type, setType] = useState<ChartType>(defaultType);
+  const v = useMemo(() => buildView(days, view, asOf), [days, view, asOf]);
+
+  const hasData = v.current.some((p) => p && p.value != null);
+
   return (
     <div className="card qc-chart-card">
       <div className="qc-chart-head">
         <h2>{title}</h2>
-        <div className="qc-viewtoggle">
-          {VIEW_OPTS.map((o) => (
-            <button key={o.key} className={`qc-vbtn ${view === o.key ? "active" : ""}`} onClick={() => setView(o.key)}>{o.label}</button>
-          ))}
+        <div className="qc-chart-controls">
+          <div className="qc-typetoggle">
+            <button className={type === "line" ? "active" : ""} onClick={() => setType("line")} title="Line view"><LineIcon /></button>
+            <button className={type === "bar" ? "active" : ""} onClick={() => setType("bar")} title="Bar view"><BarIcon /></button>
+          </div>
+          <div className="qc-viewtoggle">
+            {VIEW_OPTS.map((o) => <button key={o.key} className={`qc-vbtn ${view === o.key ? "active" : ""}`} onClick={() => setView(o.key)}>{o.label}</button>)}
+          </div>
         </div>
       </div>
       {v.previous && (
         <div className="qc-legend qc-cmp-legend">
           <span className="qc-leg"><i style={{ background: "var(--accent)" }} />{v.curLabel}</span>
           <span className="qc-leg"><i style={{ background: "var(--text-faint)" }} />{v.prevLabel}</span>
+          <span className="qc-leg"><i style={{ background: "var(--warn)" }} />Trend</span>
         </div>
       )}
-      {kind === "buckets" && !v.previous && (
-        <div className="qc-legend" style={{ marginBottom: 8 }}>
-          <span className="qc-leg"><i style={{ background: "var(--good)" }} />&lt;6h</span>
-          <span className="qc-leg"><i style={{ background: "var(--warn)" }} />6–12h</span>
-          <span className="qc-leg"><i style={{ background: "var(--danger)" }} />&gt;12h</span>
-        </div>
-      )}
-      {kind === "line" && <LineView v={v} accessor={(p) => p.avgHrs} unit="hrs" />}
-      {kind === "throughput" && <BarsView v={v} accessor={(p) => p.throughput} />}
-      {kind === "buckets" && <BucketsView v={v} />}
+      {hint && !hasData ? <div className="qc-empty">{hint}</div> : <SeriesPlot v={v} type={type} fmt={fmt} labelFmt={labelFmt} />}
     </div>
   );
 }
 
-/* ----- views model ----- */
-interface ViewModel {
+function SeriesPlot({ v, type, fmt, labelFmt }: { v: DayView<DayValue>; type: ChartType; fmt: (n: number | null) => string; labelFmt: (n: number) => string }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const [gid] = useState(() => "qcg" + Math.random().toString(36).slice(2, 8));
+  const W = 860, H = 300, PADL = 50, PADR = 16, PADT = 22, PADB = 34;
+  const iw = W - PADL - PADR, ih = H - PADT - PADB;
+  const val = (p: DayValue | null) => (p ? p.value : null);
+  const cmp = !!v.previous;
+  const all = [...v.current, ...(v.previous || [])].map(val).filter((x): x is number => x != null);
+  const yMax = niceMax(Math.max(0.0001, ...all));
+  const n = v.slots.length;
+  const x = (i: number) => PADL + (n <= 1 ? iw / 2 : (iw * i) / (n - 1));
+  const y = (vv: number) => PADT + ih - (ih * vv) / yMax;
+  const grid = [0, 0.25, 0.5, 0.75, 1].map((f) => yMax * f);
+  const showX = (i: number) => n <= 14 || i % Math.ceil(n / 14) === 0 || i === n - 1;
+  const dense = n > 20;
+
+  const tl = trend(v.current.map(val));
+
+  const linePath = (arr: (DayValue | null)[]) => {
+    const pts = arr.map((p, i) => ({ i, vv: val(p) })).filter((p) => p.vv != null) as { i: number; vv: number }[];
+    return pts.length ? pts.map((p, k) => `${k ? "L" : "M"}${x(p.i).toFixed(1)},${y(p.vv).toFixed(1)}`).join(" ") : "";
+  };
+
+  return (
+    <div className="qc-chart-wrap">
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="qc-svg" onMouseLeave={() => setHover(null)}>
+        <defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--accent)" stopOpacity="0.22" /><stop offset="100%" stopColor="var(--accent)" stopOpacity="0" /></linearGradient></defs>
+        {grid.map((g, i) => (
+          <g key={i}><line x1={PADL} y1={y(g)} x2={W - PADR} y2={y(g)} className="qc-grid" />
+            <text x={PADL - 8} y={y(g) + 4} className="qc-axis" textAnchor="end">{labelFmt(g)}</text></g>
+        ))}
+        {v.slots.map((s, i) => showX(i) && <text key={i} x={x(i)} y={H - 12} className="qc-axis" textAnchor="middle">{s.label}</text>)}
+
+        {type === "bar" ? (
+          v.slots.map((s, i) => {
+            const groupW = iw / Math.max(1, n);
+            const bw = Math.min(cmp ? 13 : 24, (groupW * 0.74) / (cmp ? 2 : 1));
+            const gap = cmp ? bw * 0.2 : 0;
+            const center = x(i);
+            const bars = cmp
+              ? [{ vv: val(v.current[i]), c: "var(--accent)", lbl: true }, { vv: val(v.previous![i]), c: "var(--text-faint)", lbl: false }]
+              : [{ vv: val(v.current[i]), c: "var(--accent)", lbl: true }];
+            const totalW = bars.length * bw + (bars.length - 1) * gap, start = center - totalW / 2;
+            return (
+              <g key={s.key}>
+                {bars.map((b, bi) => b.vv == null ? null : (
+                  <g key={bi}>
+                    <rect x={start + bi * (bw + gap)} y={y(b.vv)} width={bw} height={Math.max(0, PADT + ih - y(b.vv))} rx={3} fill={b.c} className="qc-gbar"><title>{`${s.label}: ${fmt(b.vv)}`}</title></rect>
+                    {b.lbl && <text x={start + bi * (bw + gap) + bw / 2} y={y(b.vv) - 4} className="qc-dlabel" textAnchor="middle">{labelFmt(b.vv)}</text>}
+                  </g>
+                ))}
+              </g>
+            );
+          })
+        ) : (
+          <>
+            {!cmp && <path d={`${linePath(v.current)} L${x(n - 1).toFixed(1)},${(PADT + ih).toFixed(1)} L${x(v.current.findIndex((p) => val(p) != null)).toFixed(1)},${(PADT + ih).toFixed(1)} Z`} fill={`url(#${gid})`} />}
+            {v.previous && <path d={linePath(v.previous)} fill="none" stroke="var(--text-faint)" strokeWidth={1.6} strokeLinejoin="round" strokeLinecap="round" />}
+            <path d={linePath(v.current)} fill="none" stroke="var(--accent)" strokeWidth={2.6} strokeLinejoin="round" strokeLinecap="round" />
+            {v.current.map((p, i) => val(p) != null && <circle key={i} cx={x(i)} cy={y(val(p)!)} r={hover === i ? 4.5 : 2.4} fill="var(--accent)" />)}
+            {v.current.map((p, i) => val(p) != null && <text key={`l${i}`} x={x(i)} y={y(val(p)!) - 9} className="qc-dlabel" textAnchor="middle">{labelFmt(val(p)!)}</text>)}
+          </>
+        )}
+
+        {/* trendline */}
+        {tl && <line x1={x(0)} y1={y(Math.max(0, Math.min(yMax, tl.b)))} x2={x(n - 1)} y2={y(Math.max(0, Math.min(yMax, tl.b + tl.m * (n - 1))))} stroke="var(--warn)" strokeWidth={2} strokeDasharray="6 4" opacity={0.9} />}
+
+        {hover != null && <line x1={x(hover)} y1={PADT} x2={x(hover)} y2={PADT + ih} className="qc-guide" />}
+        {v.slots.map((_, i) => <rect key={i} x={x(i) - iw / (2 * Math.max(1, n - 1))} y={PADT} width={iw / Math.max(1, n - 1)} height={ih} fill="transparent" onMouseEnter={() => setHover(i)} />)}
+      </svg>
+      {hover != null && (
+        <div className="qc-tooltip" style={{ left: `${(x(hover) / W) * 100}%` }}>
+          <div className="qc-tt-day">{v.slots[hover].label}</div>
+          <div className="qc-tt-row"><span>{v.curLabel}</span><b>{fmt(val(v.current[hover]))}</b></div>
+          {v.previous && <div className="qc-tt-row"><span>{v.prevLabel}</span><b>{fmt(val(v.previous[hover]))}</b></div>}
+        </div>
+      )}
+      {dense && <div className="qc-densenote">Tip: many points — switch view to “Last 7 days” for clearer labels.</div>}
+    </div>
+  );
+}
+
+const LineIcon = () => <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden><polyline points="1,11 5,6 9,9 15,2" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" strokeLinecap="round" /></svg>;
+const BarIcon = () => <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden><rect x="1" y="8" width="3.2" height="7" fill="currentColor" /><rect x="6.4" y="3" width="3.2" height="12" fill="currentColor" /><rect x="11.8" y="10" width="3.2" height="5" fill="currentColor" /></svg>;
+
+function trend(values: (number | null)[]): { m: number; b: number } | null {
+  const pts = values.map((v, i) => ({ i, v })).filter((p) => p.v != null) as { i: number; v: number }[];
+  if (pts.length < 2) return null;
+  const n = pts.length;
+  let sx = 0, sy = 0, sxx = 0, sxy = 0;
+  for (const p of pts) { sx += p.i; sy += p.v; sxx += p.i * p.i; sxy += p.i * p.v; }
+  const d = n * sxx - sx * sx;
+  if (d === 0) return null;
+  const m = (n * sxy - sx * sy) / d;
+  return { m, b: (sy - m * sx) / n };
+}
+
+/* ----- buckets card (its own; view toggle, no type toggle / trendline) ----- */
+function BucketsCard({ daily, asOf }: { daily: QcDailyPoint[]; asOf: string }) {
+  const [view, setView] = useState<View>("7d");
+  const v = useMemo(() => buildView(daily, view, asOf), [daily, view, asOf]);
+  return (
+    <div className="card qc-chart-card">
+      <div className="qc-chart-head">
+        <h2>Resolution time buckets</h2>
+        <div className="qc-viewtoggle">
+          {VIEW_OPTS.map((o) => <button key={o.key} className={`qc-vbtn ${view === o.key ? "active" : ""}`} onClick={() => setView(o.key)}>{o.label}</button>)}
+        </div>
+      </div>
+      {v.previous
+        ? <BucketSummaryLegend />
+        : <div className="qc-legend" style={{ marginBottom: 8 }}>
+            <span className="qc-leg"><i style={{ background: "var(--good)" }} />&lt;6h</span>
+            <span className="qc-leg"><i style={{ background: "var(--warn)" }} />6–12h</span>
+            <span className="qc-leg"><i style={{ background: "var(--danger)" }} />&gt;12h</span>
+          </div>}
+      <BucketsView v={v} />
+    </div>
+  );
+}
+const BucketSummaryLegend = () => (
+  <div className="qc-legend" style={{ marginBottom: 8 }}>
+    <span className="qc-leg"><i style={{ background: "var(--good)" }} />&lt;6h</span>
+    <span className="qc-leg"><i style={{ background: "var(--warn)" }} />6–12h</span>
+    <span className="qc-leg"><i style={{ background: "var(--danger)" }} />&gt;12h</span>
+  </div>
+);
+
+function BucketsView({ v }: { v: DayView<QcDailyPoint> }) {
+  const segs = [
+    { key: "under6" as const, color: "var(--good)", label: "<6h" },
+    { key: "h6_12" as const, color: "var(--warn)", label: "6–12h" },
+    { key: "over12" as const, color: "var(--danger)", label: ">12h" },
+  ];
+  const get = (p: QcDailyPoint | null, key: "under6" | "h6_12" | "over12") => (p ? p.buckets[key] : 0);
+  const sum = (arr: (QcDailyPoint | null)[]) => arr.reduce((a, p) => ({ under6: a.under6 + get(p, "under6"), h6_12: a.h6_12 + get(p, "h6_12"), over12: a.over12 + get(p, "over12") }), { under6: 0, h6_12: 0, over12: 0 });
+  const curTot = sum(v.current as (QcDailyPoint | null)[]);
+  if (curTot.under6 + curTot.h6_12 + curTot.over12 === 0)
+    return <div className="qc-empty">Buckets populate once the question includes <code>under_6h / h6_12 / over_12h</code>.</div>;
+
+  if (v.previous) {
+    const rows = [{ name: v.curLabel, t: curTot }, { name: v.prevLabel || "Prev", t: sum(v.previous as (QcDailyPoint | null)[]) }];
+    return (
+      <div className="qc-stacks">
+        {rows.map((r) => {
+          const total = r.t.under6 + r.t.h6_12 + r.t.over12 || 1;
+          return (
+            <div className="qc-stack-row" key={r.name}>
+              <span className="qc-stack-label">{r.name}</span>
+              <div className="qc-stack">{segs.map((s) => { const val = r.t[s.key], pct = (val / total) * 100; return pct > 0 ? <div key={s.key} className="qc-stack-seg" style={{ width: `${pct}%`, background: s.color }} title={`${s.label}: ${val}`}>{pct > 7 ? `${Math.round(pct)}%` : ""}</div> : null; })}</div>
+              <span className="qc-stack-tot">{fmtCompact(total)}</span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  const W = 860, H = 300, PADL = 46, PADR = 12, PADT = 24, PADB = 34;
+  const iw = W - PADL - PADR, ih = H - PADT - PADB;
+  const max = Math.max(1, ...(v.current as (QcDailyPoint | null)[]).flatMap((p) => segs.map((s) => get(p, s.key))));
+  const yMax = niceMax(max);
+  const n = v.slots.length;
+  const groupW = iw / Math.max(1, n);
+  const barW = Math.min(20, (groupW * 0.74) / 3);
+  const gap = barW * 0.18;
+  const y = (vv: number) => PADT + ih - (ih * vv) / yMax;
+  const grid = [0, 0.25, 0.5, 0.75, 1].map((f) => yMax * f);
+  const showLbl = n <= 14;
+  const showX = (i: number) => n <= 14 || i % Math.ceil(n / 14) === 0 || i === n - 1;
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="qc-svg">
+      {grid.map((g, i) => (<g key={i}><line x1={PADL} y1={y(g)} x2={W - PADR} y2={y(g)} className="qc-grid" /><text x={PADL - 8} y={y(g) + 4} className="qc-axis" textAnchor="end">{fmtCompact(g)}</text></g>))}
+      {v.slots.map((s, gi) => {
+        const center = PADL + groupW * (gi + 0.5), totalW = 3 * barW + 2 * gap, start = center - totalW / 2;
+        return (
+          <g key={s.key}>
+            {segs.map((sg, si) => {
+              const val = get(v.current[gi] as QcDailyPoint | null, sg.key), xx = start + si * (barW + gap), top = y(val);
+              return <g key={sg.key}><rect x={xx} y={top} width={barW} height={Math.max(0, PADT + ih - top)} rx={3} fill={sg.color} className="qc-gbar"><title>{`${s.label} ${sg.label}: ${val}`}</title></rect>{showLbl && val > 0 && <text x={xx + barW / 2} y={top - 4} className="qc-blabel" textAnchor="middle">{fmtCompact(val)}</text>}</g>;
+            })}
+            {showX(gi) && <text x={center} y={H - 12} className="qc-axis" textAnchor="middle">{s.label}</text>}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+/* ----- views model (generic over anything with a date) ----- */
+interface DayView<T> {
   slots: { key: string; label: string }[];
-  current: (QcDailyPoint | null)[];
-  previous: (QcDailyPoint | null)[] | null;
+  current: (T | null)[];
+  previous: (T | null)[] | null;
   curLabel: string;
   prevLabel: string | null;
 }
@@ -295,13 +398,14 @@ const DAY = 86400000;
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const parseUTC = (d: string) => new Date(`${d}T00:00:00Z`).getTime();
 const toDate = (ms: number) => new Date(ms).toISOString().slice(0, 10);
-function buildView(daily: QcDailyPoint[], view: View, asOf: string): ViewModel {
-  const map = new Map(daily.map((p) => [p.date, p]));
+
+function buildView<T extends { date: string }>(days: T[], view: View, asOf: string): DayView<T> {
+  const map = new Map(days.map((p) => [p.date, p]));
   const anchor = parseUTC(asOf);
   if (view === "7d" || view === "7dcmp") {
-    const slots: ViewModel["slots"] = [];
-    const current: (QcDailyPoint | null)[] = [];
-    const previous: (QcDailyPoint | null)[] = [];
+    const slots: { key: string; label: string }[] = [];
+    const current: (T | null)[] = [];
+    const previous: (T | null)[] = [];
     for (let i = 6; i >= 0; i--) {
       const ms = anchor - i * DAY;
       slots.push({ key: toDate(ms), label: DOW[new Date(ms).getUTCDay()] });
@@ -312,236 +416,23 @@ function buildView(daily: QcDailyPoint[], view: View, asOf: string): ViewModel {
       ? { slots, current, previous: null, curLabel: "Last 7 days", prevLabel: null }
       : { slots, current, previous, curLabel: "This week", prevLabel: "Prev week" };
   }
-  // last 30 / last 60 days — single curve over the window
-  const days = view === "last60" ? 60 : 30;
-  const slots: ViewModel["slots"] = [];
-  const current: (QcDailyPoint | null)[] = [];
-  for (let i = days - 1; i >= 0; i--) {
+  const days_ = view === "last60" ? 60 : 30;
+  const slots: { key: string; label: string }[] = [];
+  const current: (T | null)[] = [];
+  for (let i = days_ - 1; i >= 0; i--) {
     const ms = anchor - i * DAY;
     slots.push({ key: toDate(ms), label: toDate(ms).slice(5) });
     current.push(map.get(toDate(ms)) || null);
   }
-  return { slots, current, previous: null, curLabel: `Last ${days} days`, prevLabel: null };
+  return { slots, current, previous: null, curLabel: `Last ${days_} days`, prevLabel: null };
 }
 
-/* ----- line view (avg QC) ----- */
-function LineView({ v, accessor }: { v: ViewModel; accessor: (p: QcDailyPoint) => number | null; unit: string }) {
-  const [hover, setHover] = useState<number | null>(null);
-  const W = 860, H = 300, PADL = 54, PADR = 16, PADT = 22, PADB = 34;
-  const iw = W - PADL - PADR, ih = H - PADT - PADB;
-  const val = (p: QcDailyPoint | null) => (p ? accessor(p) : null);
-  const allVals = [...v.current, ...(v.previous || [])].map(val).filter((x): x is number => x != null);
-  const yMax = niceMax(Math.max(0.1, ...allVals));
-  const n = v.slots.length;
-  const x = (i: number) => PADL + (n <= 1 ? iw / 2 : (iw * i) / (n - 1));
-  const y = (vv: number) => PADT + ih - (ih * vv) / yMax;
-  const grid = [0, 0.25, 0.5, 0.75, 1].map((f) => yMax * f);
-  const series = [
-    { arr: v.current, color: "var(--accent)", width: 2.8, label: true },
-    ...(v.previous ? [{ arr: v.previous, color: "var(--text-faint)", width: 1.6, label: false }] : []),
-  ];
-  const showXLabel = (i: number) => n <= 12 || i % Math.ceil(n / 12) === 0 || i === n - 1;
-
-  return (
-    <div className="qc-chart-wrap">
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="qc-svg" onMouseLeave={() => setHover(null)}>
-        {grid.map((g, i) => (
-          <g key={i}><line x1={PADL} y1={y(g)} x2={W - PADR} y2={y(g)} className="qc-grid" />
-            <text x={PADL - 8} y={y(g) + 4} className="qc-axis" textAnchor="end">{fmtHrsShort(g)}</text></g>
-        ))}
-        {v.slots.map((s, i) => showXLabel(i) && <text key={i} x={x(i)} y={H - 12} className="qc-axis" textAnchor="middle">{s.label}</text>)}
-        {series.map((s, si) => {
-          const pts = s.arr.map((p, i) => ({ i, vv: val(p) })).filter((p) => p.vv != null) as { i: number; vv: number }[];
-          if (!pts.length) return null;
-          const path = pts.map((p, k) => `${k ? "L" : "M"}${x(p.i).toFixed(1)},${y(p.vv).toFixed(1)}`).join(" ");
-          return (
-            <g key={si}>
-              <path d={path} fill="none" stroke={s.color} strokeWidth={s.width} strokeLinejoin="round" strokeLinecap="round" />
-              {pts.map((p) => <circle key={p.i} cx={x(p.i)} cy={y(p.vv)} r={hover === p.i ? 4.5 : 2.6} fill={s.color} />)}
-              {s.label && n <= 14 && pts.map((p) => <text key={p.i} x={x(p.i)} y={y(p.vv) - 9} className="qc-dlabel" textAnchor="middle">{fmtHrs(p.vv)}</text>)}
-            </g>
-          );
-        })}
-        {hover != null && <line x1={x(hover)} y1={PADT} x2={x(hover)} y2={PADT + ih} className="qc-guide" />}
-        {v.slots.map((_, i) => <rect key={i} x={x(i) - iw / (2 * Math.max(1, n - 1))} y={PADT} width={iw / Math.max(1, n - 1)} height={ih} fill="transparent" onMouseEnter={() => setHover(i)} />)}
-      </svg>
-      {hover != null && v.current[hover] && (
-        <div className="qc-tooltip" style={{ left: `${(x(hover) / W) * 100}%` }}>
-          <div className="qc-tt-day">{v.slots[hover].label}</div>
-          <div className="qc-tt-row"><span>{v.curLabel}</span><b>{fmtHrs(val(v.current[hover]))}</b></div>
-          {v.previous && <div className="qc-tt-row"><span>{v.prevLabel}</span><b>{fmtHrs(val(v.previous[hover]))}</b></div>}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ----- bars view (throughput) ----- */
-function BarsView({ v, accessor }: { v: ViewModel; accessor: (p: QcDailyPoint) => number }) {
-  const W = 860, H = 280, PADL = 46, PADR = 12, PADT = 22, PADB = 34;
-  const iw = W - PADL - PADR, ih = H - PADT - PADB;
-  const cmp = !!v.previous;
-  const val = (p: QcDailyPoint | null) => (p ? accessor(p) : 0);
-  const allVals = [...v.current, ...(v.previous || [])].map(val);
-  const yMax = niceMax(Math.max(1, ...allVals));
-  const n = v.slots.length;
-  const groupW = iw / Math.max(1, n);
-  const barW = Math.min(cmp ? 14 : 26, (groupW * 0.72) / (cmp ? 2 : 1));
-  const gap = cmp ? barW * 0.2 : 0;
-  const y = (vv: number) => PADT + ih - (ih * vv) / yMax;
-  const grid = [0, 0.5, 1].map((f) => yMax * f);
-  const showXLabel = (i: number) => n <= 12 || i % Math.ceil(n / 12) === 0 || i === n - 1;
-
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="qc-svg">
-      {grid.map((g, i) => (
-        <g key={i}><line x1={PADL} y1={y(g)} x2={W - PADR} y2={y(g)} className="qc-grid" />
-          <text x={PADL - 8} y={y(g) + 4} className="qc-axis" textAnchor="end">{fmtCompact(g)}</text></g>
-      ))}
-      {v.slots.map((s, gi) => {
-        const center = PADL + groupW * (gi + 0.5);
-        const bars = cmp
-          ? [{ vv: val(v.current[gi]), color: "var(--accent)" }, { vv: val(v.previous![gi]), color: "var(--text-faint)" }]
-          : [{ vv: val(v.current[gi]), color: "var(--accent)" }];
-        const totalW = bars.length * barW + (bars.length - 1) * gap;
-        const start = center - totalW / 2;
-        return (
-          <g key={s.key}>
-            {bars.map((b, bi) => {
-              const xx = start + bi * (barW + gap), top = y(b.vv);
-              return (
-                <g key={bi}>
-                  <rect x={xx} y={top} width={barW} height={Math.max(0, PADT + ih - top)} rx={3} fill={b.color} className="qc-gbar"><title>{`${s.label}: ${b.vv}`}</title></rect>
-                  {!cmp && b.vv > 0 && n <= 14 && <text x={xx + barW / 2} y={top - 4} className="qc-blabel" textAnchor="middle">{fmtCompact(b.vv)}</text>}
-                </g>
-              );
-            })}
-            {showXLabel(gi) && <text x={center} y={H - 12} className="qc-axis" textAnchor="middle">{s.label}</text>}
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
-
-/* ----- buckets view: per-day grouped (7d) OR period-total stacked (comparison) ----- */
-function BucketsView({ v }: { v: ViewModel }) {
-  const segs = [
-    { key: "under6" as const, color: "var(--good)", label: "<6h" },
-    { key: "h6_12" as const, color: "var(--warn)", label: "6–12h" },
-    { key: "over12" as const, color: "var(--danger)", label: ">12h" },
-  ];
-  const sum = (arr: (QcDailyPoint | null)[]) =>
-    arr.reduce((a, p) => ({
-      under6: a.under6 + (p?.buckets.under6 ?? 0),
-      h6_12: a.h6_12 + (p?.buckets.h6_12 ?? 0),
-      over12: a.over12 + (p?.buckets.over12 ?? 0),
-    }), { under6: 0, h6_12: 0, over12: 0 });
-
-  const curTot = sum(v.current);
-  const empty = curTot.under6 + curTot.h6_12 + curTot.over12 === 0;
-  if (empty) return <div className="qc-empty">Buckets populate once the question includes <code>under_6h / h6_12 / over_12h</code>.</div>;
-
-  // comparison views -> two horizontal stacked bars (period totals)
-  if (v.previous) {
-    const rows = [
-      { name: v.curLabel, t: curTot },
-      { name: v.prevLabel || "Prev", t: sum(v.previous) },
-    ];
-    return (
-      <div className="qc-stacks">
-        <div className="qc-legend" style={{ marginBottom: 10 }}>
-          {segs.map((s) => <span key={s.key} className="qc-leg"><i style={{ background: s.color }} />{s.label}</span>)}
-        </div>
-        {rows.map((r) => {
-          const total = r.t.under6 + r.t.h6_12 + r.t.over12 || 1;
-          return (
-            <div className="qc-stack-row" key={r.name}>
-              <span className="qc-stack-label">{r.name}</span>
-              <div className="qc-stack">
-                {segs.map((s) => {
-                  const val = r.t[s.key], pct = (val / total) * 100;
-                  return pct > 0 ? (
-                    <div key={s.key} className="qc-stack-seg" style={{ width: `${pct}%`, background: s.color }} title={`${s.label}: ${val}`}>
-                      {pct > 7 ? `${Math.round(pct)}%` : ""}
-                    </div>
-                  ) : null;
-                })}
-              </div>
-              <span className="qc-stack-tot">{fmtCompact(total)}</span>
-            </div>
-          );
-        })}
-      </div>
-    );
-  }
-
-  // non-comparison -> per-day GROUPED bars: 3 distinct columns (<6h / 6-12h / >12h)
-  const W = 860, H = 300, PADL = 46, PADR = 12, PADT = 24, PADB = 34;
-  const iw = W - PADL - PADR, ih = H - PADT - PADB;
-  const max = Math.max(1, ...v.current.flatMap((p) => segs.map((s) => p?.buckets[s.key] ?? 0)));
-  const yMax = niceMax(max);
-  const n = v.slots.length;
-  const groupW = iw / Math.max(1, n);
-  const barW = Math.min(20, (groupW * 0.74) / 3);
-  const gap = barW * 0.18;
-  const y = (vv: number) => PADT + ih - (ih * vv) / yMax;
-  const grid = [0, 0.25, 0.5, 0.75, 1].map((f) => yMax * f);
-  const showLbl = n <= 14;
-  const showX = (i: number) => n <= 12 || i % Math.ceil(n / 12) === 0 || i === n - 1;
-
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="qc-svg">
-      {grid.map((g, i) => (
-        <g key={i}><line x1={PADL} y1={y(g)} x2={W - PADR} y2={y(g)} className="qc-grid" />
-          <text x={PADL - 8} y={y(g) + 4} className="qc-axis" textAnchor="end">{fmtCompact(g)}</text></g>
-      ))}
-      {v.slots.map((s, gi) => {
-        const center = PADL + groupW * (gi + 0.5);
-        const totalW = 3 * barW + 2 * gap, start = center - totalW / 2;
-        return (
-          <g key={s.key}>
-            {segs.map((sg, si) => {
-              const val = v.current[gi]?.buckets[sg.key] ?? 0, xx = start + si * (barW + gap), top = y(val);
-              return (
-                <g key={sg.key}>
-                  <rect x={xx} y={top} width={barW} height={Math.max(0, PADT + ih - top)} rx={3} fill={sg.color} className="qc-gbar"><title>{`${s.label} ${sg.label}: ${val}`}</title></rect>
-                  {showLbl && val > 0 && <text x={xx + barW / 2} y={top - 4} className="qc-blabel" textAnchor="middle">{fmtCompact(val)}</text>}
-                </g>
-              );
-            })}
-            {showX(gi) && <text x={center} y={H - 12} className="qc-axis" textAnchor="middle">{s.label}</text>}
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
-
-/* ----- small KPI ----- */
+/* ----- KPI + format helpers ----- */
 function Kpi({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: boolean }) {
-  return (
-    <div className={`qc-kpi ${accent ? "accent" : ""}`}>
-      <span className="qc-kpi-label">{label}</span>
-      <div className="qc-kpi-value">{value}</div>
-      {sub && <span className="qc-kpi-sub">{sub}</span>}
-    </div>
-  );
+  return (<div className={`qc-kpi ${accent ? "accent" : ""}`}><span className="qc-kpi-label">{label}</span><div className="qc-kpi-value">{value}</div>{sub && <span className="qc-kpi-sub">{sub}</span>}</div>);
 }
-
-/* ----- format helpers ----- */
 function fmtInt(n: number | null | undefined): string { return n == null ? "—" : Math.round(n).toLocaleString("en-US"); }
 function fmtCompact(n: number): string { return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : `${Math.round(n)}`; }
-function fmtHrs(h: number | null | undefined): string {
-  if (h == null) return "—";
-  if (h < 1) return `${Math.round(h * 60)}m`;
-  const hr = Math.floor(h), mn = Math.round((h - hr) * 60);
-  return mn ? `${hr}h ${mn}m` : `${hr}h`;
-}
+function fmtHrs(h: number | null | undefined): string { if (h == null) return "—"; if (h < 1) return `${Math.round(h * 60)}m`; const hr = Math.floor(h), mn = Math.round((h - hr) * 60); return mn ? `${hr}h ${mn}m` : `${hr}h`; }
 function fmtHrsShort(h: number): string { return h < 1 ? `${Math.round(h * 60)}m` : `${h % 1 === 0 ? h : h.toFixed(1)}h`; }
-function niceMax(v: number): number {
-  if (v <= 0) return 1;
-  const pow = Math.pow(10, Math.floor(Math.log10(v))), nn = v / pow;
-  const step = nn <= 1 ? 1 : nn <= 2 ? 2 : nn <= 5 ? 5 : 10;
-  return step * pow;
-}
+function niceMax(v: number): number { if (v <= 0) return 1; const pow = Math.pow(10, Math.floor(Math.log10(v))), nn = v / pow; const step = nn <= 1 ? 1 : nn <= 2 ? 2 : nn <= 5 ? 5 : 10; return step * pow; }
