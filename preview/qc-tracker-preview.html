@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>QC Time Tracker — Preview</title>
+<style>
+  :root{--bg:#0b1020;--bg-soft:#11182e;--panel:#151d33;--panel2:#1b2540;--border:#243150;
+    --text:#e6ecff;--dim:#9aa6c7;--faint:#6b7796;--accent:#6366f1;--tech:#6366f1;--ai:#0ea5e9;--good:#22c55e;--danger:#ef4444;}
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 600px at 80% -10%,#16203c 0%,var(--bg) 55%);color:var(--text);
+    font-family:ui-sans-serif,system-ui,"Segoe UI",Roboto,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+  .app{max-width:1240px;margin:0 auto;padding:26px 22px 70px}
+  .header{margin-bottom:20px}
+  h1{font-size:21px;margin:0 0 4px;display:flex;align-items:center;gap:10px}
+  .badge{font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;padding:4px 9px;border-radius:999px;color:var(--good);border:1px solid rgba(34,197,94,.45)}
+  .sub{color:var(--dim);font-size:13px}
+  .grid{display:grid;gap:14px}
+  .kpis{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-bottom:16px}
+  .card{background:linear-gradient(180deg,var(--panel),var(--bg-soft));border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:0 6px 24px rgba(0,0,0,.35)}
+  .kpi{transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease}
+  .kpi:hover{transform:translateY(-3px);border-color:#2f3f66;box-shadow:0 10px 30px rgba(0,0,0,.45)}
+  .kpi.accent{border-color:rgba(99,102,241,.5);background:linear-gradient(180deg,#1a2245,var(--bg-soft))}
+  .label{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;display:block}
+  .value{font-size:26px;font-weight:800;line-height:1.15;margin-top:6px}
+  .vsub{font-size:11.5px;color:var(--faint);margin-top:5px;display:block}
+  .good{color:var(--good)}.danger{color:var(--danger)}
+  .chead{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:10px;flex-wrap:wrap}
+  .chead h2{font-size:14px;margin:0}
+  .legend{display:flex;gap:14px}.leg{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dim)}.leg i{width:12px;height:3px;border-radius:2px;display:inline-block}
+  svg{width:100%;height:auto;display:block;overflow:visible}
+  .bars{display:flex;gap:10px;align-items:flex-end;height:150px;padding-top:8px}
+  .bcol{flex:1;display:flex;flex-direction:column;align-items:center;height:100%;justify-content:flex-end}
+  .btrack{width:100%;max-width:54px;flex:1;display:flex;align-items:flex-end}
+  .bfill{width:100%;background:linear-gradient(180deg,var(--accent),#3b3fae);border-radius:6px 6px 0 0;min-height:2px;transition:filter .18s}
+  .bcol:hover .bfill{filter:brightness(1.25)}
+  .bval{font-size:11px;margin-top:6px}.blab{font-size:11px;color:var(--faint);margin-top:2px}
+  .foot{color:var(--faint);font-size:12px;margin-top:18px;line-height:1.6}
+  .note{background:var(--panel);border:1px solid rgba(245,158,11,.35);border-radius:12px;padding:12px 14px;color:var(--dim);font-size:12.5px;margin-top:16px;line-height:1.6}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="header">
+    <h1>QC Time Tracker <span class="badge">live</span></h1>
+    <div class="sub">Quality-control turnaround · image &amp; 360 · last 7 days · as of 2026-06-22</div>
+  </div>
+  <div class="grid kpis" id="kpis"></div>
+  <div class="card" style="margin-bottom:16px">
+    <div class="chead"><h2>Average QC time — last 7 days</h2>
+      <div class="legend"><span class="leg"><i style="background:var(--text)"></i>Combined</span><span class="leg"><i style="background:var(--tech)"></i>Image</span><span class="leg"><i style="background:var(--ai)"></i>360</span></div>
+    </div>
+    <svg id="chart" viewBox="0 0 860 300" preserveAspectRatio="xMidYMid meet"></svg>
+  </div>
+  <div class="card">
+    <div class="chead"><h2>Daily throughput</h2><span style="color:var(--faint);font-size:12px">SKUs clearing QC each day</span></div>
+    <div class="bars" id="bars"></div>
+  </div>
+  <div class="note">⚠ Mon 06-22 dips because the day is still in progress (only the fast SKUs have cleared QC yet) — a normal right-censoring effect on the latest day. 360 here still uses the old metric; once the Assigned→Done turnaround question is saved, the 360 line refreshes automatically.</div>
+  <div class="foot">Rendered from live <b>/api/qc</b> data (image + 360 daily questions). This is the actual dashboard design.</div>
+</div>
+<script>
+  const DAILY=[
+    {label:"Tue",date:"06-16",comb:3.08,img:3.20,s360:2.46,thru:12781},
+    {label:"Wed",date:"06-17",comb:2.97,img:3.16,s360:1.90,thru:12719},
+    {label:"Thu",date:"06-18",comb:2.09,img:2.26,s360:1.34,thru:11897},
+    {label:"Fri",date:"06-19",comb:2.93,img:3.29,s360:2.04,thru:8053},
+    {label:"Sat",date:"06-20",comb:3.01,img:3.66,s360:1.78,thru:4965},
+    {label:"Sun",date:"06-21",comb:4.39,img:5.54,s360:1.38,thru:1156},
+    {label:"Mon",date:"06-22",comb:0.85,img:0.59,s360:2.33,thru:4857}];
+  const fmtH=h=>h==null?"—":(h<1?Math.round(h*60)+"m":Math.floor(h)+"h "+Math.round((h-Math.floor(h))*60)+"m");
+  const fmtI=n=>n.toLocaleString("en-US");
+  const KPIS=[
+    {l:"Avg QC time",v:fmtH(2.65),s:"combined · last 7 days",c:"accent"},
+    {l:"vs last day",v:"▼ 81%",s:"faster",cls:"good"},
+    {l:"vs last 3 days",v:"▼ 17%",s:"faster",cls:"good"},
+    {l:"Throughput / day",v:fmtI(8061),s:"SKUs clearing QC"},
+    {l:"QC'd (7 days)",v:fmtI(56428),s:"total SKUs"},
+    {l:"Image avg",v:fmtH(2.84),s:"43,944 SKUs"},
+    {l:"360 avg",v:fmtH(1.91),s:"12,484 SKUs"}];
+  document.getElementById("kpis").innerHTML=KPIS.map(k=>`<div class="card kpi ${k.c||''}"><span class="label">${k.l}</span><div class="value ${k.cls||''}">${k.v}</div><span class="vsub">${k.s}</span></div>`).join("");
+  document.getElementById("bars").innerHTML=(()=>{const m=Math.max(...DAILY.map(d=>d.thru));return DAILY.map(d=>`<div class="bcol" title="${d.label}: ${fmtI(d.thru)}"><div class="btrack"><div class="bfill" style="height:${d.thru/m*100}%"></div></div><div class="bval">${fmtI(d.thru)}</div><div class="blab">${d.label}</div></div>`).join("");})();
+  (function(){const W=860,H=300,L=54,R=16,T=18,B=34,iw=W-L-R,ih=H-T-B;
+    const ymax=6, x=i=>L+iw*i/(DAILY.length-1), y=v=>T+ih-ih*v/ymax;
+    let s="";for(let g=0;g<=4;g++){const v=ymax*g/4,yy=y(v);s+=`<line x1="${L}" y1="${yy}" x2="${W-R}" y2="${yy}" stroke="#243150"/><text x="${L-8}" y="${yy+4}" fill="#6b7796" font-size="11" text-anchor="end">${v%1?v.toFixed(1):v}h</text>`;}
+    DAILY.forEach((d,i)=>s+=`<text x="${x(i)}" y="${H-12}" fill="#6b7796" font-size="11" text-anchor="middle">${d.label}</text>`);
+    [["comb","#e6ecff",2.8],["img","#6366f1",1.8],["s360","#0ea5e9",1.8]].forEach(([k,c,w])=>{
+      const pts=DAILY.map((d,i)=>`${x(i).toFixed(1)},${y(d[k]).toFixed(1)}`).join(" ");
+      s+=`<polyline fill="none" stroke="${c}" stroke-width="${w}" points="${pts}" stroke-linejoin="round"/>`;
+      DAILY.forEach((d,i)=>s+=`<circle cx="${x(i)}" cy="${y(d[k])}" r="2.8" fill="${c}"/>`);});
+    document.getElementById("chart").innerHTML=s;})();
+</script>
+</body>
+</html>

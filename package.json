@@ -1,0 +1,24 @@
+{
+  "name": "vin-delivery-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Delivery-time tracking framework: stage-wise TAT, aging, and KPI dashboard for a VIN's journey (Received -> Tech -> AI -> QC/Delivered).",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "^14.2.35",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "recharts": "2.12.7"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.10",
+    "@types/react": "18.3.3",
+    "@types/react-dom": "18.3.0",
+    "typescript": "5.4.5"
+  }
+}

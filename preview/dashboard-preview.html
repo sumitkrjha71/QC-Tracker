@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>VIN Delivery Tracker — Dashboard Preview</title>
+<style>
+  :root{
+    --bg:#0b1020;--bg-soft:#11182e;--panel:#151d33;--panel2:#1b2540;--border:#243150;
+    --text:#e6ecff;--dim:#9aa6c7;--faint:#6b7796;--tech:#6366f1;--ai:#0ea5e9;--qc:#22c55e;
+    --warn:#f59e0b;--danger:#ef4444;--good:#22c55e;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 600px at 80% -10%,#16203c 0%,var(--bg) 55%);
+    color:var(--text);font-family:ui-sans-serif,system-ui,"Segoe UI",Roboto,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+  .app{max-width:1240px;margin:0 auto;padding:26px 22px 70px}
+  .header{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:20px}
+  h1{font-size:21px;margin:0 0 4px}
+  .sub{color:var(--dim);font-size:13px}
+  .badge{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;
+    padding:4px 9px;border-radius:999px;border:1px solid rgba(245,158,11,.4);color:var(--warn);margin-left:8px}
+  .win{font-size:12px;color:var(--faint);border:1px solid var(--border);border-radius:8px;padding:7px 10px;background:var(--panel)}
+  .grid{display:grid;gap:14px}
+  .kpis{grid-template-columns:repeat(auto-fit,minmax(185px,1fr));margin-bottom:16px}
+  .cols2{grid-template-columns:1.5fr 1fr;margin-bottom:16px}
+  @media(max-width:900px){.cols2{grid-template-columns:1fr}}
+  .card{background:linear-gradient(180deg,var(--panel),var(--bg-soft));border:1px solid var(--border);
+    border-radius:14px;padding:16px;box-shadow:0 6px 24px rgba(0,0,0,.35)}
+  .card h2{font-size:13px;margin:0 0 12px;letter-spacing:.2px}
+  .card h2 .hint{color:var(--faint);font-weight:400;font-size:11px;margin-left:6px}
+  .kpi .label{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;display:block}
+  .kpi .value{font-size:27px;font-weight:800;line-height:1.15;margin-top:6px}
+  .kpi .delta{font-size:11.5px;color:var(--faint);margin-top:5px;display:block}
+  .good{color:var(--good)}.warn{color:var(--warn)}.danger{color:var(--danger)}
+  .bar{display:flex;height:46px;border-radius:11px;overflow:hidden;border:1px solid var(--border);background:var(--panel2)}
+  .seg{display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:700}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;font-size:12px;color:var(--dim)}
+  .legend .it{display:flex;align-items:center;gap:7px}
+  .dot{width:10px;height:10px;border-radius:3px;display:inline-block}
+  .end{margin-top:11px;font-size:12.5px;color:var(--dim)}
+  .end b{color:var(--text)}
+  svg{width:100%;height:auto;display:block}
+  .mbar{display:flex;align-items:center;gap:10px;margin:9px 0;font-size:12.5px}
+  .mbar .name{width:54px;color:var(--dim)}
+  .mtrack{flex:1;background:var(--panel2);border-radius:6px;overflow:hidden;height:20px;border:1px solid var(--border)}
+  .mfill{height:100%;border-radius:6px}
+  .mval{width:74px;text-align:right;color:var(--text);font-variant-numeric:tabular-nums}
+  .foot{color:var(--faint);font-size:12px;margin-top:18px;line-height:1.6}
+  .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:10.5px;font-weight:700;border:1px solid rgba(245,158,11,.45);color:var(--warn)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="header">
+    <div>
+      <h1>VIN Delivery Tracker<span class="badge">demo data</span></h1>
+      <div class="sub">Received → Tech → AI → QC · turnaround, aging &amp; bottleneck visibility</div>
+    </div>
+    <div class="win">📅 Rolling last 30 days · 22 May → 21 Jun (auto-advances daily)</div>
+  </div>
+
+  <!-- KPI ROW -->
+  <div class="grid kpis" id="kpis"></div>
+
+  <!-- STAGE PROGRESS BAR -->
+  <div class="card" style="margin-bottom:16px">
+    <h2>Stage-wise journey<span class="hint">average time a deliverable spends in each phase</span></h2>
+    <div class="bar" id="bar"></div>
+    <div class="legend" id="legend"></div>
+    <div class="end">End-to-end average: <b id="e2e"></b> &nbsp;·&nbsp; <span style="color:var(--faint)">AI is the bottleneck at 63% of journey time</span></div>
+  </div>
+
+  <!-- ACROSS-DAYS CHART + MEDIA -->
+  <div class="grid cols2">
+    <div class="card">
+      <h2>Avg time per phase, across days<span class="hint">Tech · AI · QC · total TAT (lower = better)</span></h2>
+      <svg id="chart" viewBox="0 0 820 320" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Per-phase time across days"></svg>
+      <div class="legend" id="clegend"></div>
+    </div>
+    <div class="card">
+      <h2>Image · 360 · Video<span class="hint">avg end-to-end TAT by media</span></h2>
+      <div id="media"></div>
+      <div class="foot" style="margin-top:14px">Each VIN fans out to up to 3 media SKUs via the <b>medias</b> table — Catalog→image, Spin→360, FeatureVideo→video.</div>
+    </div>
+  </div>
+
+  <div class="foot">
+    This is the actual dashboard rendered on <b>synthetic data</b> (runs today with <code>npm run dev</code>, no DB).
+    Wire the Metabase question and it shows your real VINs — same layout, same KPIs.
+  </div>
+</div>
+
+<script>
+  // ---- live snapshot captured from /api/metrics (mock mode) ----
+  const K = {totalSkus:806,distinctVins:407,delivered:761,deliveredThisWeek:171,
+    tatAvg:625,tatMed:543,tatP90:986,thisWk:569,lastWk:648,imp:12.1,sla:96,aging:0,bn:"AI Processing"};
+  const STAGES=[{k:"Tech",m:132,p:21,c:"var(--tech)"},{k:"AI",m:392,p:63,c:"var(--ai)"},{k:"QC",m:100,p:16,c:"var(--qc)"}];
+  const MEDIA=[{t:"Image",tat:333,c:"var(--tech)"},{t:"360",tat:616,c:"var(--ai)"},{t:"Video",tat:951,c:"var(--qc)"}];
+  const TREND=[{"d":"05-23","tech":133,"ai":321,"qc":104,"tat":558},{"d":"05-24","tech":144,"ai":309,"qc":99,"tat":552},{"d":"05-25","tech":151,"ai":372,"qc":116,"tat":639},{"d":"05-26","tech":139,"ai":393,"qc":95,"tat":627},{"d":"05-27","tech":143,"ai":362,"qc":107,"tat":612},{"d":"05-28","tech":146,"ai":366,"qc":106,"tat":618},{"d":"05-29","tech":158,"ai":462,"qc":101,"tat":721},{"d":"05-30","tech":110,"ai":337,"qc":86,"tat":534},{"d":"05-31","tech":129,"ai":395,"qc":109,"tat":633},{"d":"06-01","tech":140,"ai":333,"qc":117,"tat":590},{"d":"06-02","tech":131,"ai":334,"qc":101,"tat":566},{"d":"06-03","tech":126,"ai":448,"qc":92,"tat":666},{"d":"06-04","tech":105,"ai":498,"qc":82,"tat":685},{"d":"06-05","tech":154,"ai":516,"qc":110,"tat":779},{"d":"06-06","tech":142,"ai":447,"qc":101,"tat":690},{"d":"06-07","tech":124,"ai":323,"qc":102,"tat":550},{"d":"06-08","tech":149,"ai":505,"qc":105,"tat":758},{"d":"06-09","tech":134,"ai":596,"qc":103,"tat":832},{"d":"06-10","tech":123,"ai":446,"qc":100,"tat":670},{"d":"06-11","tech":111,"ai":335,"qc":105,"tat":551},{"d":"06-12","tech":124,"ai":419,"qc":98,"tat":640},{"d":"06-13","tech":148,"ai":335,"qc":104,"tat":587},{"d":"06-14","tech":121,"ai":381,"qc":99,"tat":601},{"d":"06-15","tech":133,"ai":333,"qc":101,"tat":568},{"d":"06-16","tech":133,"ai":457,"qc":98,"tat":688},{"d":"06-17","tech":110,"ai":327,"qc":91,"tat":528},{"d":"06-18","tech":119,"ai":309,"qc":91,"tat":519},{"d":"06-19","tech":129,"ai":289,"qc":81,"tat":499},{"d":"06-20","tech":122,"ai":386,"qc":86,"tat":594}];
+
+  const fmt=m=>{m=Math.round(m);const h=Math.floor(m/60),mm=m%60;return h?(mm?`${h}h ${mm}m`:`${h}h`):`${mm}m`;};
+
+  // KPI cards
+  const cards=[
+    {label:"Avg TAT · this week",value:fmt(K.thisWk),sub:`last week ${fmt(K.lastWk)} · 30-day ${fmt(K.tatAvg)}`},
+    {label:"Improvement vs last week",value:`▼ ${Math.round(K.imp)}%`,sub:"faster than last week",cls:"good"},
+    {label:`Bottleneck · ${K.bn}`,value:fmt(392),sub:"63% of journey time",cls:"warn"},
+    {label:"SLA compliance",value:`${K.sla}%`,sub:"target 24h",cls:"good"},
+    {label:"Aging / stuck",value:`${K.aging}`,sub:"past stage threshold",cls:"good"},
+    {label:"Volume",value:`${K.totalSkus}`,sub:`${K.distinctVins} VINs · ${K.delivered} delivered · ${K.deliveredThisWeek} this wk`},
+  ];
+  document.getElementById("kpis").innerHTML=cards.map(c=>
+    `<div class="card kpi"><span class="label">${c.label}</span><div class="value ${c.cls||''}">${c.value}</div><span class="delta">${c.sub}</span></div>`).join("");
+
+  // progress bar
+  document.getElementById("bar").innerHTML=STAGES.map(s=>
+    `<div class="seg" style="width:${s.p}%;background:${s.c}">${fmt(s.m)}</div>`).join("");
+  document.getElementById("legend").innerHTML=STAGES.map(s=>
+    `<div class="it"><span class="dot" style="background:${s.c}"></span>${s.k} <b style="color:var(--text);margin-left:4px">${fmt(s.m)}</b> <span style="color:var(--faint);margin-left:4px">(${s.p}%)</span>${s.k==="AI"?' <span class="pill" style="margin-left:6px">bottleneck</span>':''}</div>`).join("");
+  document.getElementById("e2e").textContent=fmt(STAGES.reduce((a,s)=>a+s.m,0));
+
+  // media bars
+  const mmax=Math.max(...MEDIA.map(m=>m.tat));
+  document.getElementById("media").innerHTML=MEDIA.map(m=>
+    `<div class="mbar"><span class="name">${m.t}</span><div class="mtrack"><div class="mfill" style="width:${(m.tat/mmax*100).toFixed(0)}%;background:${m.c}"></div></div><span class="mval">${fmt(m.tat)}</span></div>`).join("");
+
+  // line chart
+  (function(){
+    const W=820,H=320,L=44,R=12,T=14,B=30,iw=W-L-R,ih=H-T-B;
+    const ymax=1000;
+    const xs=i=>L+(iw*i/(TREND.length-1));
+    const ys=v=>T+ih-(ih*v/ymax);
+    const series=[{k:"tat",c:"#e6ecff",w:2.6,name:"Total TAT"},{k:"ai",c:"#0ea5e9",w:1.6,name:"AI"},
+      {k:"tech",c:"#6366f1",w:1.6,name:"Tech"},{k:"qc",c:"#22c55e",w:1.6,name:"QC"}];
+    let svg="";
+    // gridlines + y labels (in hours)
+    for(let g=0;g<=4;g++){const v=ymax*g/4;const y=ys(v);
+      svg+=`<line x1="${L}" y1="${y}" x2="${W-R}" y2="${y}" stroke="#243150" stroke-width="1"/>`;
+      svg+=`<text x="${L-8}" y="${y+4}" fill="#6b7796" font-size="11" text-anchor="end">${Math.round(v/60)}h</text>`;}
+    // x labels every 5
+    TREND.forEach((p,i)=>{if(i%5===0||i===TREND.length-1){
+      svg+=`<text x="${xs(i)}" y="${H-10}" fill="#6b7796" font-size="10.5" text-anchor="middle">${p.d}</text>`;}});
+    // lines
+    series.forEach(s=>{const pts=TREND.map((p,i)=>`${xs(i).toFixed(1)},${ys(p[s.k]).toFixed(1)}`).join(" ");
+      svg+=`<polyline fill="none" stroke="${s.c}" stroke-width="${s.w}" points="${pts}" stroke-linejoin="round" stroke-linecap="round"/>`;});
+    document.getElementById("chart").innerHTML=svg;
+    document.getElementById("clegend").innerHTML=series.map(s=>
+      `<div class="it"><span class="dot" style="background:${s.c}"></span>${s.name}</div>`).join("");
+  })();
+</script>
+</body>
+</html>
